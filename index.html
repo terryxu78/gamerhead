@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Game Heads: Make gameplay assets more engaging with AI Gaming Streamers!</title>
+    <!--ENV_INJECTION_POINT-->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Google+Sans:wght@400;500;700;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['Google Sans', 'Inter', 'sans-serif'],
+              mono: ['JetBrains Mono', 'monospace'],
+            },
+            colors: {
+              google: {
+                // Dark mode variants of Google colors
+                blue: '#8AB4F8', 
+                blueHover: '#AECBFA',
+                red: '#F28B82', 
+                yellow: '#FDD663',
+                green: '#81C995',
+                // Dark mode surfaces
+                gray: '#303134',
+                grayHover: '#3C4043',
+                text: '#E8EAED',
+                textSec: '#9AA0A6',
+                surface: '#1E1E1E', // Card background
+                background: '#121212', // App background
+              }
+            },
+            boxShadow: {
+              'card': '0 1px 2px 0 rgba(0,0,0,0.3), 0 1px 3px 1px rgba(0,0,0,0.15)',
+              'card-hover': '0 1px 3px 0 rgba(0,0,0,0.3), 0 4px 8px 3px rgba(0,0,0,0.15)',
+              'float': '0 6px 10px 0 rgba(0,0,0,0.3), 0 1px 18px 0 rgba(0,0,0,0.3), 0 3px 5px -1px rgba(0,0,0,0.4)'
+            },
+            animation: {
+              'fade-in': 'fadeIn 0.3s ease-out',
+            },
+            keyframes: {
+              fadeIn: {
+                '0%': { opacity: '0', transform: 'translateY(10px)' },
+                '100%': { opacity: '1', transform: 'translateY(0)' },
+              }
+            }
+          },
+        },
+      }
+    </script>
+    <style>
+      body {
+        background-color: #121212;
+        color: #E8EAED;
+      }
+      .scrollbar-hide::-webkit-scrollbar {
+          display: none;
+      }
+      /* Clean dark scrollbar */
+      ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+      ::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: #3C4043;
+        border-radius: 4px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: #5F6368;
+      }
+    </style>
+  <script type="importmap">
+{
+  "imports": {
+    "react/": "https://aistudiocdn.com/react@^19.2.0/",
+    "react": "https://aistudiocdn.com/react@^19.2.0",
+    "@google/genai": "https://aistudiocdn.com/@google/genai@^1.30.0",
+    "react-dom/": "https://aistudiocdn.com/react-dom@^19.2.0/",
+    "path": "https://esm.sh/path@^0.12.7",
+    "vite": "https://esm.sh/vite@^7.3.0",
+    "@vitejs/plugin-react": "https://esm.sh/@vitejs/plugin-react@^5.1.2",
+    "express": "https://esm.sh/express@^5.2.1",
+    "url": "https://esm.sh/url@^0.11.4",
+    "fs": "https://esm.sh/fs@^0.0.1-security",
+    "recharts": "https://esm.sh/recharts@^3.6.0",
+    "firebase-admin/": "https://esm.sh/firebase-admin@^13.6.0/",
+    "dotenv/": "https://esm.sh/dotenv@^17.2.3/",
+    "compression": "https://esm.sh/compression@^1.8.1"
+  }
+}
+</script>
+<link rel="stylesheet" href="/index.css">
+</head>
+  <body>
+    <div id="root"></div>
+  <script type="module" src="/index.tsx"></script>
+</body>
+</html>
