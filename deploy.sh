@@ -101,6 +101,18 @@ if [ "$CONFIRM" != "y" ]; then
 fi
 
 echo ""
+echo "🔐 配置 Cloud Build 的 Artifact Registry 推送权限..."
+# 获取 Project Number
+PROJECT_NUMBER=$(gcloud projects describe $PROJECT_ID --format='value(projectNumber)')
+# 赋予 Cloud Build 默认服务账户写入 Artifact Registry 的权限，防止因为权限不足导致构建后的镜像无法推送
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:${PROJECT_NUMBER}@cloudbuild.gserviceaccount.com" \
+  --role="roles/artifactregistry.writer" \
+  --condition=None \
+  > /dev/null 2>&1 || echo "   (忽略权限赋予的警告，继续执行)"
+echo "   ✅ 权限配置完成"
+
+echo ""
 echo "🏗️  开始部署到 Cloud Run..."
 echo "📦 正在将本地源码打包并利用 GCP Cloud Build 进行云端构建并部署 (大约需要 3-5 分钟)..."
 
