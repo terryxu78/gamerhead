@@ -1,67 +1,88 @@
-# GamerHeads - GitHub 迁移与部署指南
+# GamerHeads - 开源部署指南
 
-本文档描述了如何将当前位于 `/data1/gameh.rayner.prod` 的代码迁移到 GitHub，以及如何在未来使用 GitHub Actions 自动构建 Docker 镜像，并在 Cloud Run 中拉取和部署。
+本项目支持用户直接将代码部署到自己的 Google Cloud Platform (GCP) 项目中。
+为了兼顾 "开箱即用" 和 "二次开发" 两种需求，我们设计了以下部署流水线架构。
 
-## 1. 将代码推送到 GitHub
+---
 
-当前目录尚未关联 GitHub 仓库，您可以通过以下步骤将代码首次上传到您的 GitHub 账号（例如：`terryxu78`）下的新仓库：
+## 架构设计：双轨部署流水线
 
-```bash
-# 1. 进入代码目录
-cd /data1/gameh.rayner.prod
+本项目使用 **GitHub Actions** + **GitHub Container Registry (GHCR)** + **Google Cloud Run** 的组合。
 
-# 2. 初始化 Git 仓库
-git init
+1. **官方预编译镜像 (推荐普通用户使用)**
+   - 我们在 GitHub 仓库的 `.github/workflows/docker-publish.yml` 中配置了自动化流水线。
+   - 每当主分支更新时，GitHub Actions 会自动打包出最新的 Docker 镜像，并发布到公开的 GitHub Packages (GHCR)。
+   - **优势**: 用户不需要在本地安装 Docker，也不需要在 GCP 上重新编译。只需拉取编译好的镜像直接运行，速度极快（通常 < 1分钟）。
 
-# 3. 添加所有文件
-git add .
+2. **从源码构建部署 (推荐开发者/二次修改用户)**
+   - 如果用户 clone 了代码并在本地修改了界面或逻辑，预编译的镜像就无法满足需求了。
+   - 用户可以选择直接将本地代码上传给 GCP，让 GCP Cloud Build 编译成镜像并运行。
+   - **优势**: 所见即所得，修改了什么代码就部署什么代码。
 
-# 4. 提交更改
-git commit -m "Initial commit: Move to GitHub and setup GHCR deployment"
+---
 
-# 5. 重命名默认分支为 main
-git branch -M main
+## 如何部署到您自己的 GCP 环境
 
-# 6. 添加您的 GitHub 仓库远程地址 (请将 YOUR_REPO 替换为您的仓库名，如 gamerheads-prod)
-git remote add origin https://github.com/terryxu78/YOUR_REPO.git
+我们在项目中提供了一个交互式的 `deploy.sh` 脚本，可以自动帮您完成数据库初始化和 Cloud Run 的部署。
 
-# 7. 推送代码
-git push -u origin main
+### 前置准备
+
+1. **安装并登录 Google Cloud CLI**
+   您需要在本地电脑上安装 [Google Cloud CLI (gcloud)](https://cloud.google.com/sdk/docs/install)，并执行以下命令登录您的 Google 账号：
+   ```bash
+   gcloud auth login
+   ```
+
+2. **准备 GCP 项目及 Billing**
+   您必须拥有一个 GCP 项目（Project ID），并且该项目**必须关联一个结算账户 (Billing Account)**，否则无法使用 Cloud Run。
+
+3. **获取 Gemini API Key**
+   确保您已经在 Google AI Studio 申请了 Gemini API 密钥。
+
+### 开始部署
+
+1. 在终端进入代码目录。
+2. 赋予脚本执行权限：
+   ```bash
+   chmod +x deploy.sh
+   ```
+3. 运行部署脚本：
+   ```bash
+   ./deploy.sh
+   ```
+
+### 选择部署模式
+
+脚本运行时，会提示您选择部署模式：
+
+```text
+🌟 请选择部署方式:
+1) 快速部署 (使用官方预编译镜像，推荐，速度最快)
+2) 从源码部署 (如果您修改了本地代码，选此项)
+输入选项 [1/2, 默认: 1]:
 ```
 
-## 2. GitHub Actions 自动构建镜像 (重建逻辑)
+- **选 1 (快速部署)**：脚本会直接拉取开源仓库的 `ghcr.io/...:latest` 镜像部署到您的 GCP。
+- **选 2 (源码部署)**：脚本会打包您当前目录的所有文件，上传到 GCP Cloud Build，并在云端完成编译（这需要大约 3-5 分钟）。
 
-我们在 `.github/workflows/docker-publish.yml` 中配置了自动化工作流。
+*(注：无论选择哪种方式，脚本都会自动帮您检查并创建配套的 Firestore Native 数据库)*
 
-**重建逻辑工作流程：**
-1. **触发构建**：当您向 GitHub 仓库的 `main` 分支推送代码（`git push`），或发布新的 Tag 时，GitHub Actions 会自动触发。
-2. **构建镜像**：Actions 会读取代码库中的 `Dockerfile` 并在 GitHub 服务器上构建 Docker 镜像。
-3. **推送到 GHCR**：构建完成后，镜像会被自动推送到 GitHub Container Registry (GHCR)，路径为 `ghcr.io/terryxu78/YOUR_REPO:latest`。
+---
 
-*如果您想手动重建，也可以在 GitHub 网页端的 "Actions" 标签页中点击 "Build and Push Docker Image" -> "Run workflow" 按钮。*
+## 开发者维护指南：如何发布"官方镜像"
 
-### 注意事项：镜像权限设置
-为了让 Cloud Run 能够拉取您构建的 Docker 镜像：
-1. 登录 GitHub，点击头像 -> **Your profile** -> **Packages**。
-2. 找到您刚刚推送的镜像（例如：`YOUR_REPO`）。
-3. 点击 **Package settings**。
-4. 在 "Danger Zone" 中，找到 **Change package visibility**，将其设置为 **Public**。
-*(如果必须保持 Private，则需要在 Cloud Run 部署时配置拉取私有镜像的凭据，设置较为复杂，推荐前端/打包应用在 Package 级别设为 Public，代码本身仍可为 Private 仓库)*。
+如果您是本仓库的所有者/维护者：
 
-## 3. 使用脚本部署到 Cloud Run
+1. **将代码推送到 GitHub 主分支 (main)**
+   只需正常的 `git push` 操作，GitHub Actions 就会自动触发构建。
 
-我们已更新了本地的 `deploy.sh`。它不再使用本地源码通过 Cloud Build 慢速构建，而是直接从您构建好的 GitHub Container Registry 中拉取最新的镜像。
+2. **设置公开访问权限**
+   由于 Cloud Run 在没有配置特殊凭证时只能拉取公开镜像：
+   - 请登录您的 GitHub，进入个人主页的 **Packages**。
+   - 找到刚才生成的 Docker 镜像（通常名为您的仓库名）。
+   - 进入 **Package settings** -> **Change package visibility**，将其设置为 **Public**。
+   - 修改项目中的 `deploy.sh`，将 `OFFICIAL_IMAGE` 变量替换为您刚刚公开的 GHCR 地址。
 
-**部署步骤：**
-```bash
-./deploy.sh
-```
+---
 
-**在脚本执行过程中，您需要：**
-1. 确认当前的 GCP 项目。
-2. 提供 Cloud Run 服务名称和部署区域 (Region)。
-3. 输入您的 Gemini API Key。
-4. **（新增）** 输入您的 GitHub 用户名（如 `terryxu78`）和仓库名（如 `gamerheads-prod`）。脚本会自动拼接成 `ghcr.io/terryxu78/gamerheads-prod:latest` 并使用该镜像进行部署。
-
-这样，您的发布流程变成了：
-**写代码 -> git commit -> git push (自动触发 GitHub Action 构建并更新 GHCR 镜像) -> 等待构建完成 -> 运行 ./deploy.sh 将最新镜像部署到 GCP Cloud Run。**
+现在，任何人只需要下载这份代码，运行 `./deploy.sh`，即可在他们自己的 GCP 环境中轻松启动属于自己的 GamerHeads 服务！

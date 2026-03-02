@@ -1,4 +1,4 @@
-name: Build and Push Docker Image
+name: Build and Publish Official Image
 
 on:
   push:
@@ -6,11 +6,11 @@ on:
       - main
     tags:
       - 'v*.*.*'
-  workflow_dispatch: # Allows manual trigger
+  workflow_dispatch: # 允许手动触发
 
 env:
   REGISTRY: ghcr.io
-  # github.repository as <account>/<repo>
+  # 这里会自动使用您的 GitHub 用户名和仓库名 (例如: terryxu78/gamerheads)
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
+      packages: write # 需要写入 GitHub Packages 的权限
 
     steps:
       - name: Checkout repository
