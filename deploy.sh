@@ -69,13 +69,6 @@ else
     echo "   ℹ️  Firestore 数据库已存在，跳过创建"
 fi
 
-echo ""
-echo "🌟 请选择部署方式:"
-echo "1) 快速部署 (使用官方预编译镜像，推荐，速度最快)"
-echo "2) 从源码部署 (如果您修改了本地代码，选此项)"
-read -p "输入选项 [1/2, 默认: 1]: " DEPLOY_MODE
-DEPLOY_MODE=${DEPLOY_MODE:-1}
-
 # 设置服务名称
 read -p "输入 Cloud Run 服务名称 [默认: gamerheads]: " SERVICE_NAME
 SERVICE_NAME=${SERVICE_NAME:-gamerheads}
@@ -109,42 +102,20 @@ fi
 
 echo ""
 echo "🏗️  开始部署到 Cloud Run..."
+echo "📦 正在将本地源码打包并利用 GCP Cloud Build 进行云端构建并部署 (大约需要 3-5 分钟)..."
 
-if [ "$DEPLOY_MODE" == "1" ]; then
-    # 填入您未来的官方 GitHub 镜像库地址
-    # 假设您的 GitHub 用户名是 terryxu78，仓库是 gamerheads
-    OFFICIAL_IMAGE="ghcr.io/terryxu78/gamerheads:latest"
-    echo "📦 使用官方镜像: $OFFICIAL_IMAGE"
-    
-    gcloud run deploy $SERVICE_NAME \
-      --image=$OFFICIAL_IMAGE \
-      --region=$REGION \
-      --platform=managed \
-      --allow-unauthenticated \
-      --set-env-vars="GEMINI_API_KEY=$API_KEY,GOOGLE_CLOUD_PROJECT=$PROJECT_ID" \
-      --memory=2Gi \
-      --cpu=2 \
-      --timeout=3600 \
-      --max-instances=10 \
-      --min-instances=0 \
-      --project=$PROJECT_ID
-
-else
-    echo "📦 使用本地源码构建并部署 (首次构建可能需要 3-5 分钟)..."
-    
-    gcloud run deploy $SERVICE_NAME \
-      --source . \
-      --region=$REGION \
-      --platform=managed \
-      --allow-unauthenticated \
-      --set-env-vars="GEMINI_API_KEY=$API_KEY,GOOGLE_CLOUD_PROJECT=$PROJECT_ID" \
-      --memory=2Gi \
-      --cpu=2 \
-      --timeout=3600 \
-      --max-instances=10 \
-      --min-instances=0 \
-      --project=$PROJECT_ID
-fi
+gcloud run deploy $SERVICE_NAME \
+  --source . \
+  --region=$REGION \
+  --platform=managed \
+  --allow-unauthenticated \
+  --set-env-vars="GEMINI_API_KEY=$API_KEY,GOOGLE_CLOUD_PROJECT=$PROJECT_ID" \
+  --memory=2Gi \
+  --cpu=2 \
+  --timeout=3600 \
+  --max-instances=10 \
+  --min-instances=0 \
+  --project=$PROJECT_ID
 
 echo ""
 echo "✅ 部署成功!"
