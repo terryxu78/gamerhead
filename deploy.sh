@@ -113,13 +113,28 @@ gcloud projects add-iam-policy-binding $PROJECT_ID \
   --condition=None \
   > /dev/null 2>&1 || echo "   (忽略权限赋予的警告，继续执行)"
 
-echo "   - 配置 Cloud Run 访问 Datastore 权限..."
-# 赋予默认 Compute 服务账户 Datastore/Firestore 的读写权限
-gcloud projects add-iam-policy-binding $PROJECT_ID \
-  --member="serviceAccount:${PROJECT_NUMBER}-compute@developer.gserviceaccount.com" \
-  --role="roles/datastore.user" \
-  --condition=None \
-  > /dev/null 2>&1 || echo "   (忽略权限赋予的警告，继续执行)"
+echo "   - 配置 Cloud Run 运行所需的各项服务权限 (Datastore, Vertex AI, Storage 等)..."
+COMPUTE_SA="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
+
+# 需要赋予 Compute Service Account 的角色列表
+ROLES=(
+  "roles/datastore.user"
+  "roles/cloudtrace.agent"
+  "roles/cloudtranslate.user"
+  "roles/logging.logWriter"
+  "roles/monitoring.metricWriter"
+  "roles/iam.serviceAccountTokenCreator"
+  "roles/storage.objectAdmin"
+  "roles/aiplatform.user"
+)
+
+for ROLE in "${ROLES[@]}"; do
+  gcloud projects add-iam-policy-binding $PROJECT_ID \
+    --member="serviceAccount:${COMPUTE_SA}" \
+    --role="$ROLE" \
+    --condition=None \
+    > /dev/null 2>&1 || echo "   (⚠️ 无法绑定角色 $ROLE，可能是权限不足)"
+done
 
 echo "   ✅ 权限配置完成"
 
