@@ -85,11 +85,12 @@ apiRouter.post('/log', async (req, res) => {
     try {
         if (database) {
             // Datastore API: Create a key and entity
-            const key = database.key(['GenerationLog']);
+            const key = database.key('GenerationLog');
             const entity = {
                 key: key,
-        if (database) {
-            await database.collection('generation_logs').add(entry);
+                data: entry
+            };
+            await database.save(entity);
         } else {
             mockDbStore.logs.unshift(entry);
             // Limit mock storage to prevent overflow during long dev sessions
@@ -132,18 +133,20 @@ apiRouter.get('/admin/stats', async (req, res) => {
             console.log(`[Admin] Fetching logs from ${startDate.toISOString()} to ${endDate.toISOString()}`);
             
             try {
-                // Simplified query: Only orderBy without where clauses
-                // This avoids need for composite index
-                const snapshot = await database.collection('generation_logs')
-                    .orderBy('timestamp', 'desc')
-                    .limit(2000)
-                    .get();
+                const query = database.createQuery('GenerationLog')
+                    .order('timestamp', { descending: true })
+                    .limit(2000);
                 
-                console.log(`[Admin] Retrieved ${snapshot.docs.length} documents from Firestore`);
+                const [entities] = await database.runQuery(query);
+                
+                console.log(`[Admin] Retrieved ${entities.length} documents from Datastore`);
                 
                 // Client-side filtering by date range
-                rawLogs = snapshot.docs
-                    .map(doc => ({ id: doc.id, ...doc.data() }))
+                rawLogs = entities
+                    .map(entity => {
+                        const id = entity[database.KEY].id || entity[database.KEY].name;
+                        return { id, ...entity };
+                    })
                     .filter(log => {
                         const ts = log.timestamp?.toDate ? log.timestamp.toDate() : new Date(log.timestamp);
                         return ts >= startDate && ts <= endDate;
@@ -151,16 +154,18 @@ apiRouter.get('/admin/stats', async (req, res) => {
                     
                 console.log(`[Admin] Filtered to ${rawLogs.length} logs in date range`);
                 
-            } catch (firestoreError) {
-                console.error("❌ [Admin] Firestore query failed:", firestoreError.message);
+            } catch (dbError) {
+                console.error("❌ [Admin] Datastore query failed:", dbError.message);
                 // Fallback: try without orderBy if index is missing
                 console.log("[Admin] Attempting fallback query without orderBy...");
-                const snapshot = await database.collection('generation_logs')
-                    .limit(2000)
-                    .get();
+                const query = database.createQuery('GenerationLog').limit(2000);
+                const [entities] = await database.runQuery(query);
                 
-                rawLogs = snapshot.docs
-                    .map(doc => ({ id: doc.id, ...doc.data() }))
+                rawLogs = entities
+                    .map(entity => {
+                        const id = entity[database.KEY].id || entity[database.KEY].name;
+                        return { id, ...entity };
+                    })
                     .filter(log => {
                         const ts = log.timestamp?.toDate ? log.timestamp.toDate() : new Date(log.timestamp);
                         return ts >= startDate && ts <= endDate;
