@@ -65,6 +65,7 @@ export interface StudioState {
 
 export interface LogEntry {
   userId: string;
+  userEmail?: string | null;
   type: 'image' | 'video' | 'script' | 'export';
   model: string;
   timestamp: number;

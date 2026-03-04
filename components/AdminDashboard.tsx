@@ -87,17 +87,20 @@ const AdminDashboard: React.FC = () => {
 
     // --- Derived Data (Client-Side Filtering & Aggregation) ---
     
-    // 1. User List
+    // 1. User List (using userEmail instead of userId)
     const uniqueUsers = useMemo(() => {
         const users = new Set<string>();
-        logs.forEach(l => { if (l.userId) users.add(l.userId); });
-        return Array.from(users);
+        logs.forEach(l => { 
+            const identifier = l.userEmail || l.userId;
+            if (identifier) users.add(identifier); 
+        });
+        return Array.from(users).sort();
     }, [logs]);
 
-    // 2. Filter Logs by User
+    // 2. Filter Logs by User (using userEmail)
     const filteredLogs = useMemo(() => {
         if (selectedUser === 'all') return logs;
-        return logs.filter(l => l.userId === selectedUser);
+        return logs.filter(l => (l.userEmail || l.userId) === selectedUser);
     }, [logs, selectedUser]);
 
     // 3. Sort Logs for Table
@@ -199,10 +202,10 @@ const AdminDashboard: React.FC = () => {
     };
 
     const handleExportCSV = () => {
-        const headers = ["Timestamp", "User ID", "Type", "Model", "Status"];
+        const headers = ["Timestamp", "User Email/ID", "Type", "Model", "Status"];
         const rows = filteredLogs.map(log => [
             new Date(log.timestamp).toISOString(),
-            log.userId,
+            log.userEmail || log.userId || 'N/A',
             log.type,
             log.model,
             log.status
@@ -267,7 +270,7 @@ const AdminDashboard: React.FC = () => {
 
                     {/* User Filter & Actions */}
                     <div className="flex flex-col md:flex-row gap-4 w-full xl:w-auto">
-                        <div className="relative group min-w-[200px]">
+                        <div className="relative group min-w-[250px]">
                             <select
                                 value={selectedUser}
                                 onChange={(e) => setSelectedUser(e.target.value)}
@@ -275,7 +278,7 @@ const AdminDashboard: React.FC = () => {
                             >
                                 <option value="all">All Users ({uniqueUsers.length})</option>
                                 {uniqueUsers.map(u => (
-                                    <option key={u} value={u}>{u.substring(0, 8)}...</option>
+                                    <option key={u} value={u}>{u.includes('@') || u.length < 15 ? u : u.substring(0, 8) + '...'}</option>
                                 ))}
                             </select>
                             <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-gray-400">
@@ -382,7 +385,7 @@ const AdminDashboard: React.FC = () => {
                             <tr>
                                 {[
                                     { label: 'Time', key: 'timestamp' },
-                                    { label: 'User ID', key: 'userId' },
+                                    { label: 'User', key: 'userEmail' },
                                     { label: 'Type', key: 'type' },
                                     { label: 'Model', key: 'model' },
                                     { label: 'Status', key: 'status' }
@@ -408,8 +411,8 @@ const AdminDashboard: React.FC = () => {
                                     <td className="px-6 py-4 whitespace-nowrap text-xs text-gray-500 font-mono">
                                         {new Date(log.timestamp).toLocaleString()}
                                     </td>
-                                    <td className="px-6 py-4 font-mono text-xs text-gray-400 group-hover:text-white">
-                                        {log.userId.slice(0, 8)}...
+                                    <td className="px-6 py-4 text-xs text-gray-400 group-hover:text-white">
+                                        {log.userEmail || (log.userId ? log.userId.slice(0, 8) + '...' : 'N/A')}
                                     </td>
                                     <td className="px-6 py-4">
                                         <span className={`px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider ${

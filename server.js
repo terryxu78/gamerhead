@@ -52,7 +52,7 @@ app.set('trust proxy', true);
 app.use(compression());
 app.use(express.json());
 
-// --- AUTHENTICATION MIDDLEWARE ---
+// --- AUTHENTICATION & USER IDENTITY MIDDLEWARE ---
 const basicAuthUsersStr = process.env.BASIC_AUTH_USERS;
 
 if (basicAuthUsersStr) {
@@ -76,6 +76,8 @@ if (basicAuthUsersStr) {
         if (login && password) {
             const isValid = validUsers.some(u => u.user === login && u.pass === password);
             if (isValid) {
+                // Set the user identity for logging
+                req.userEmail = login;
                 return next();
             }
         }
@@ -85,6 +87,15 @@ if (basicAuthUsersStr) {
     });
 } else {
     console.log(`🔓 [Auth] No Basic Auth configured. Relying on IAP or public access.`);
+    
+    // IAP Identity Extraction Middleware
+    app.use((req, res, next) => {
+        const iapEmail = req.headers['x-goog-authenticated-user-email'];
+        if (iapEmail) {
+            req.userEmail = iapEmail.replace('accounts.google.com:', '');
+        }
+        next();
+    });
 }
 
 // --- ROUTES ---
@@ -112,6 +123,7 @@ const apiRouter = express.Router();
 apiRouter.post('/log', async (req, res) => {
     const entry = {
         ...req.body,
+        userEmail: req.userEmail || req.body.userEmail || null,
         timestamp: req.body.timestamp ? new Date(req.body.timestamp) : new Date(),
         _serverTime: new Date()
     };
