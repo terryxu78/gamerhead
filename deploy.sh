@@ -95,16 +95,42 @@ AUTH_MODE=${AUTH_MODE:-1}
 BASIC_AUTH_ENV=""
 if [ "$AUTH_MODE" == "2" ]; then
     echo ""
-    echo "配置固定用户名和密码:"
-    read -p "输入用户名: " BASIC_USER
-    read -s -p "输入密码: " BASIC_PASS
-    echo ""
-    if [ -z "$BASIC_USER" ] || [ -z "$BASIC_PASS" ]; then
-        echo "❌ 用户名或密码不能为空"
-        exit 1
-    fi
-    BASIC_AUTH_ENV=",BASIC_AUTH_USER=$BASIC_USER,BASIC_AUTH_PASS=$BASIC_PASS"
-    echo "✅ 已记录固定用户名密码 (将作为环境变量传入 Cloud Run)"
+    echo "配置固定用户名和密码 (支持多个账号):"
+    
+    USERS_LIST=""
+    USER_COUNT=0
+    
+    while true; do
+        read -p "👉 输入用户名 (直接回车结束添加): " BASIC_USER
+        if [ -z "$BASIC_USER" ]; then
+            if [ $USER_COUNT -eq 0 ]; then
+                echo "❌ 至少需要配置一个用户名或密码"
+                exit 1
+            fi
+            break
+        fi
+        
+        read -s -p "🔑 输入密码: " BASIC_PASS
+        echo ""
+        if [ -z "$BASIC_PASS" ]; then
+            echo "❌ 密码不能为空，请重新输入"
+            continue
+        fi
+        
+        if [ -z "$USERS_LIST" ]; then
+            USERS_LIST="${BASIC_USER}:${BASIC_PASS}"
+        else
+            USERS_LIST="${USERS_LIST},${BASIC_USER}:${BASIC_PASS}"
+        fi
+        
+        USER_COUNT=$((USER_COUNT + 1))
+        echo "✅ 账号 [$BASIC_USER] 已记录. (当前共 $USER_COUNT 个账号)"
+        echo "----------------------------------------"
+    done
+    
+    # 我们把多个账号拼成 user1:pass1,user2:pass2 的格式传给 Cloud Run
+    BASIC_AUTH_ENV=",BASIC_AUTH_USERS=$USERS_LIST"
+    echo "✅ 已完成配置 (共 $USER_COUNT 个账号)"
 fi
 
 echo ""
@@ -114,7 +140,7 @@ echo "   服务名: $SERVICE_NAME"
 echo "   区域: $REGION"
 echo "   API Key: ${API_KEY:0:10}***"
 if [ "$AUTH_MODE" == "2" ]; then
-echo "   验证方式: 固定用户名/密码 (User: $BASIC_USER)"
+echo "   验证方式: 固定用户名/密码 (共 $USER_COUNT 个账号)"
 else
 echo "   验证方式: IAP"
 fi

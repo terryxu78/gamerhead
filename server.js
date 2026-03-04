@@ -53,11 +53,17 @@ app.use(compression());
 app.use(express.json());
 
 // --- AUTHENTICATION MIDDLEWARE ---
-const basicAuthUser = process.env.BASIC_AUTH_USER;
-const basicAuthPass = process.env.BASIC_AUTH_PASS;
+const basicAuthUsersStr = process.env.BASIC_AUTH_USERS;
 
-if (basicAuthUser && basicAuthPass) {
-    console.log(`🔒 [Auth] Basic Authentication enabled for user: ${basicAuthUser}`);
+if (basicAuthUsersStr) {
+    // Parse "user1:pass1,user2:pass2" into an array of objects
+    const validUsers = basicAuthUsersStr.split(',').map(pair => {
+        const [u, p] = pair.split(':');
+        return { user: u, pass: p };
+    }).filter(u => u.user && u.pass);
+
+    console.log(`🔒 [Auth] Basic Authentication enabled for ${validUsers.length} user(s).`);
+    
     app.use((req, res, next) => {
         // Skip auth for health checks
         if (req.path === '/healthz' || req.path === '/api/health') {
@@ -67,8 +73,11 @@ if (basicAuthUser && basicAuthPass) {
         const b64auth = (req.headers.authorization || '').split(' ')[1] || '';
         const [login, password] = Buffer.from(b64auth, 'base64').toString().split(':');
 
-        if (login && password && login === basicAuthUser && password === basicAuthPass) {
-            return next();
+        if (login && password) {
+            const isValid = validUsers.some(u => u.user === login && u.pass === password);
+            if (isValid) {
+                return next();
+            }
         }
 
         res.set('WWW-Authenticate', 'Basic realm="GamerHeads Login"');
