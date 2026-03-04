@@ -87,7 +87,7 @@ fi
 
 echo ""
 echo "🛡️ 请选择网站登录验证方式:"
-echo "1) IAP 验证 (原方式，依赖 GCP IAP)"
+echo "1) IAP 验证 (依赖 GCP IAP,已完整组织设定)"
 echo "2) 固定用户名和密码验证"
 read -p "输入选项 [1/2, 默认: 1]: " AUTH_MODE
 AUTH_MODE=${AUTH_MODE:-1}
@@ -129,7 +129,7 @@ if [ "$AUTH_MODE" == "2" ]; then
     done
     
     # 我们把多个账号拼成 user1:pass1,user2:pass2 的格式传给 Cloud Run
-    BASIC_AUTH_ENV=",BASIC_AUTH_USERS=$USERS_LIST"
+    BASIC_AUTH_ENV="$USERS_LIST"
     echo "✅ 已完成配置 (共 $USER_COUNT 个账号)"
 fi
 
@@ -195,18 +195,29 @@ echo ""
 echo "🏗️  开始部署到 Cloud Run..."
 echo "📦 正在将本地源码打包并利用 GCP Cloud Build 进行云端构建并部署 (大约需要 3-5 分钟)..."
 
+# 使用临时文件传递环境变量以支持密码中的特殊字符 (!@#$%^&*)
+ENV_FILE=$(mktemp)
+echo "GEMINI_API_KEY: \"${API_KEY}\"" >> "$ENV_FILE"
+echo "GOOGLE_CLOUD_PROJECT: \"${PROJECT_ID}\"" >> "$ENV_FILE"
+if [ "$AUTH_MODE" == "2" ]; then
+    # 单引号可以防止 YAML 解析器转义特殊字符
+    echo "BASIC_AUTH_USERS: '${BASIC_AUTH_ENV}'" >> "$ENV_FILE"
+fi
+
 gcloud run deploy $SERVICE_NAME \
   --source . \
   --region=$REGION \
   --platform=managed \
   --allow-unauthenticated \
-  --set-env-vars="GEMINI_API_KEY=$API_KEY,GOOGLE_CLOUD_PROJECT=$PROJECT_ID${BASIC_AUTH_ENV}" \
+  --env-vars-file="$ENV_FILE" \
   --memory=2Gi \
   --cpu=2 \
   --timeout=3600 \
   --max-instances=10 \
   --min-instances=0 \
   --project=$PROJECT_ID
+
+rm -f "$ENV_FILE"
 
 echo ""
 echo "✅ 部署成功!"
