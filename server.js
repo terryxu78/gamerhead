@@ -52,6 +52,32 @@ app.set('trust proxy', true);
 app.use(compression());
 app.use(express.json());
 
+// --- AUTHENTICATION MIDDLEWARE ---
+const basicAuthUser = process.env.BASIC_AUTH_USER;
+const basicAuthPass = process.env.BASIC_AUTH_PASS;
+
+if (basicAuthUser && basicAuthPass) {
+    console.log(`🔒 [Auth] Basic Authentication enabled for user: ${basicAuthUser}`);
+    app.use((req, res, next) => {
+        // Skip auth for health checks
+        if (req.path === '/healthz' || req.path === '/api/health') {
+            return next();
+        }
+        
+        const b64auth = (req.headers.authorization || '').split(' ')[1] || '';
+        const [login, password] = Buffer.from(b64auth, 'base64').toString().split(':');
+
+        if (login && password && login === basicAuthUser && password === basicAuthPass) {
+            return next();
+        }
+
+        res.set('WWW-Authenticate', 'Basic realm="GamerHeads Login"');
+        res.status(401).send('Authentication required.');
+    });
+} else {
+    console.log(`🔓 [Auth] No Basic Auth configured. Relying on IAP or public access.`);
+}
+
 // --- ROUTES ---
 
 // Health Check (Root) - Useful for load balancers

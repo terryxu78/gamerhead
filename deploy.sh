@@ -86,11 +86,38 @@ if [ -z "$API_KEY" ]; then
 fi
 
 echo ""
-echo "📝 部署确认:"
+echo "🛡️ 请选择网站登录验证方式:"
+echo "1) IAP 验证 (原方式，依赖 GCP IAP)"
+echo "2) 固定用户名和密码验证"
+read -p "输入选项 [1/2, 默认: 1]: " AUTH_MODE
+AUTH_MODE=${AUTH_MODE:-1}
+
+BASIC_AUTH_ENV=""
+if [ "$AUTH_MODE" == "2" ]; then
+    echo ""
+    echo "配置固定用户名和密码:"
+    read -p "输入用户名: " BASIC_USER
+    read -s -p "输入密码: " BASIC_PASS
+    echo ""
+    if [ -z "$BASIC_USER" ] || [ -z "$BASIC_PASS" ]; then
+        echo "❌ 用户名或密码不能为空"
+        exit 1
+    fi
+    BASIC_AUTH_ENV=",BASIC_AUTH_USER=$BASIC_USER,BASIC_AUTH_PASS=$BASIC_PASS"
+    echo "✅ 已记录固定用户名密码 (将作为环境变量传入 Cloud Run)"
+fi
+
+echo ""
+echo " 部署确认:"
 echo "   项目ID: $PROJECT_ID"
 echo "   服务名: $SERVICE_NAME"
 echo "   区域: $REGION"
 echo "   API Key: ${API_KEY:0:10}***"
+if [ "$AUTH_MODE" == "2" ]; then
+echo "   验证方式: 固定用户名/密码 (User: $BASIC_USER)"
+else
+echo "   验证方式: IAP"
+fi
 echo ""
 
 read -p "确认开始部署? (y/n) [默认: y]: " CONFIRM
@@ -147,7 +174,7 @@ gcloud run deploy $SERVICE_NAME \
   --region=$REGION \
   --platform=managed \
   --allow-unauthenticated \
-  --set-env-vars="GEMINI_API_KEY=$API_KEY,GOOGLE_CLOUD_PROJECT=$PROJECT_ID" \
+  --set-env-vars="GEMINI_API_KEY=$API_KEY,GOOGLE_CLOUD_PROJECT=$PROJECT_ID${BASIC_AUTH_ENV}" \
   --memory=2Gi \
   --cpu=2 \
   --timeout=3600 \
