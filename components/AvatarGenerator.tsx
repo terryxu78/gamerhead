@@ -9,14 +9,15 @@ interface AvatarGeneratorProps {
     setExternalConfig?: (config: AvatarConfig) => void;
     onImageGenerated?: (imageUrl: string) => void;
     forcedAspectRatio?: '16:9' | '9:16' | null;
+    gamingDevice?: string;
 }
 
-const AvatarGenerator: React.FC<AvatarGeneratorProps> = ({ externalConfig, setExternalConfig, onImageGenerated, forcedAspectRatio }) => {
+const AvatarGenerator: React.FC<AvatarGeneratorProps> = ({ externalConfig, setExternalConfig, onImageGenerated, forcedAspectRatio, gamingDevice }) => {
   const [localConfig, setLocalConfig] = useState<AvatarConfig>({
     appearance: '',
     setting: '',
     aspectRatio: '16:9',
-    model: 'gemini-2.5-flash-image'
+    model: 'gemini-3.1-flash-image-preview'
   });
   
   // Use external state if provided, else local
@@ -45,7 +46,7 @@ const AvatarGenerator: React.FC<AvatarGeneratorProps> = ({ externalConfig, setEx
     setGeneratedImage(null);
 
     try {
-      const imageUrl = await generateStreamerAvatar(config);
+      const imageUrl = await generateStreamerAvatar({ ...config, gamingDevice });
       setGeneratedImage(imageUrl);
       if (onImageGenerated) onImageGenerated(imageUrl);
     } catch (err: any) {
@@ -136,7 +137,7 @@ const AvatarGenerator: React.FC<AvatarGeneratorProps> = ({ externalConfig, setEx
               onChange={(e) => setConfig({ ...config, appearance: e.target.value })}
               placeholder={config.referenceImage 
                   ? "Describe what they are doing, e.g. Holding a mobile phone, wearing headphones, looking excited." 
-                  : "Asian teen in his 20s with blonde messy hair, wearing headphones and a casual hoodie. He is playing on a mobile phone."}
+                  : "Female asian gamer in her 20s with blonde hair"}
               rows={3}
               className="w-full bg-[#2D2D2D] border border-gray-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-google-blue focus:border-transparent outline-none transition-all resize-none placeholder-gray-500"
             />
@@ -147,39 +148,10 @@ const AvatarGenerator: React.FC<AvatarGeneratorProps> = ({ externalConfig, setEx
             <textarea
               value={config.setting}
               onChange={(e) => setConfig({ ...config, setting: e.target.value })}
-              placeholder="e.g. Dark futuristic gamer room with purple and blue neon light strips, posters on the wall."
+              placeholder="Dark futuristic gamer room"
               rows={3}
               className="w-full bg-[#2D2D2D] border border-gray-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-google-blue focus:border-transparent outline-none transition-all resize-none placeholder-gray-500"
             />
-          </div>
-
-          {/* Model Selection */}
-          <div>
-             <label className="block text-sm font-bold text-gray-300 mb-2">Generation Model</label>
-             <div className="flex gap-2">
-                 <button
-                    onClick={() => setConfig({ ...config, model: 'gemini-2.5-flash-image' })}
-                    className={`flex-1 px-4 py-3 rounded-lg border text-xs font-bold transition-all flex flex-col items-center gap-1 ${
-                        config.model === 'gemini-2.5-flash-image'
-                        ? 'bg-blue-900/30 border-google-blue text-google-blue shadow-sm'
-                        : 'bg-[#2D2D2D] border-gray-600 text-gray-400 hover:border-gray-500'
-                    }`}
-                 >
-                    <span>⚡ Nano Banana</span>
-                    <span className="font-normal opacity-70 text-center text-[10px]">For speed & consistency</span>
-                 </button>
-                 <button
-                    onClick={() => setConfig({ ...config, model: 'gemini-3-pro-image-preview' })}
-                    className={`flex-1 px-4 py-3 rounded-lg border text-xs font-bold transition-all flex flex-col items-center gap-1 ${
-                        config.model === 'gemini-3-pro-image-preview'
-                        ? 'bg-purple-900/30 border-purple-500 text-purple-300 shadow-sm'
-                        : 'bg-[#2D2D2D] border-gray-600 text-gray-400 hover:border-gray-500'
-                    }`}
-                 >
-                    <span>🌟 Nano Banana Pro</span>
-                    <span className="font-normal opacity-70 text-center text-[10px]">For quality & realism</span>
-                 </button>
-             </div>
           </div>
 
           <div>

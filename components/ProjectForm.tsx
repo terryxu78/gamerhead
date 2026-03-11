@@ -393,7 +393,7 @@ const ProjectForm: React.FC<ProjectFormProps> = ({
           {/* Additional Instructions */}
           <div>
             <label className="block text-sm font-bold text-gray-300 mb-2">
-              Instructions for AI streamer <span className="text-gray-500 font-normal">(Tone, specific features)</span>
+              Specific instructions for streamer, if any. <span className="text-gray-500 font-normal">(Optional)</span>
             </label>
             <textarea
               name="additionalInstructions"

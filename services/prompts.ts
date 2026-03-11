@@ -118,8 +118,21 @@ ${STRICT_TEMPLATE}
 export const constructAvatarPrompt = (config: AvatarConfig): string => {
   const hasRef = !!config.referenceImage;
   
+  let deviceInstruction = '';
+  if (config.gamingDevice) {
+      if (config.gamingDevice === 'Mobile (Vertical)') {
+          deviceInstruction = `\n- Action: Streamer is holding and playing a mobile phone vertically (portrait mode). Only back of phone is visible`;
+      } else if (config.gamingDevice === 'Mobile (Horizontal)') {
+          deviceInstruction = `\n- Action: Streamer is holding and playing a mobile phone horizontally (landscape mode). Only back of phone is visible`;
+      } else if (config.gamingDevice === 'PC') {
+          deviceInstruction = `\n- Action: Streamer is using a keyboard and mouse.`;
+      } else if (config.gamingDevice === 'Console') {
+          deviceInstruction = `\n- Action: Streamer is holding and playing with a game controller.`;
+      }
+  }
+
   return `
-Generate ${hasRef ? "an" : "a photorealistic"} image of a video game streamer. 
+Generate ${hasRef ? "an" : "a photorealistic"} image of a live streamer. 
 
 ${hasRef ? `
 CRITICAL REFERENCE ADHERENCE:
@@ -132,13 +145,13 @@ TECHNICAL SPECS:
 `}
 
 TECHNICAL SPECS (CAMERA):
-- Perspective: Wide-angle full frontal, slight overhead, shot. Looking down slightly at the streamer.
+- Perspective: Wide-angle, direct frontal, slight overhead, shot. Looking down slightly at the streamer.
 - Framing: Close-up. Head and top of shoulders only.
 - Gaze: Streamer is looking slightly DOWN (at the monitor/phone), NOT directly into the lens.
 
 SUBJECT:
 - Appearance: ${config.appearance}
-- Setting: ${config.setting} (Background must be out of focus/depth of field).
+- Setting: ${config.setting} (Background must be out of focus/depth of field).${deviceInstruction}
 
 NEGATIVE PROMPT (DO NOT INCLUDE):
 - Text, overlays, UI, HUDs, watermarks, microphones covering the face, headphones covering the eyes.

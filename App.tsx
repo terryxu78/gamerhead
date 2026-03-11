@@ -42,7 +42,7 @@ const GameHeads: React.FC<{ onReset: () => void }> = ({ onReset }) => {
       appearance: '',
       setting: '',
       aspectRatio: '16:9',
-      model: 'gemini-2.5-flash-image'
+      model: 'gemini-3.1-flash-image-preview'
   });
   
   const [generatedAvatarImage, setGeneratedAvatarImage] = useState<string | null>(null);
@@ -274,13 +274,6 @@ const GameHeads: React.FC<{ onReset: () => void }> = ({ onReset }) => {
           </div>
       )}
 
-      {/* Attribution Header */}
-      <div className="bg-[#0e0e0e] border-b border-gray-800 py-1 px-4 text-center">
-        <p className="text-[10px] text-gray-500 font-medium tracking-wide">
-          Created by <a href="mailto:raynerseah@google.com" className="hover:text-google-blue transition-colors">raynerseah@google.com</a>
-        </p>
-      </div>
-
       {/* Navbar */}
       <nav className="bg-google-surface border-b border-gray-700 sticky top-0 z-40 shrink-0 shadow-sm relative">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
@@ -421,6 +414,7 @@ const GameHeads: React.FC<{ onReset: () => void }> = ({ onReset }) => {
                         setExternalConfig={setAvatarConfig}
                         onImageGenerated={setGeneratedAvatarImage}
                         forcedAspectRatio={forcedAvatarRatio}
+                        gamingDevice={form.gamingDevice}
                 />
                 </div>
 

@@ -252,8 +252,6 @@ export const generateStreamerAvatar = async (config: AvatarConfig): Promise<stri
       });
   }
 
-  const isPro = config.model === 'gemini-3-pro-image-preview';
-
   try {
     console.log(`[GeminiService] Calling generateContent for avatar (${config.model})...`);
     
@@ -261,14 +259,10 @@ export const generateStreamerAvatar = async (config: AvatarConfig): Promise<stri
         temperature: 0.5,
         imageConfig: {
           aspectRatio: config.aspectRatio,
-          imageSize: isPro ? "1K" : undefined
+          imageSize: "1K"
         },
         safetySettings: SAFETY_SETTINGS_BLOCK_NONE
     };
-
-    if (isPro) {
-        generationConfig.thinkingConfig = { thinkingBudget: 1024 };
-    }
 
     const response = await ai.models.generateContent({
       model: config.model,

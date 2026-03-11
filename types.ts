@@ -41,7 +41,8 @@ export interface AvatarConfig {
   setting: string;
   aspectRatio: '16:9' | '9:16';
   referenceImage?: string; // Base64 string
-  model: 'gemini-2.5-flash-image' | 'gemini-3-pro-image-preview';
+  model: 'gemini-3.1-flash-image-preview';
+  gamingDevice?: string;
 }
 
 export interface VeoSegment {
