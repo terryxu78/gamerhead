@@ -27,7 +27,7 @@ gcloud config set project YOUR_PROJECT_ID
 ### 使用自动化脚本
 
 ```bash
-cd /data1/gameh.rayner.prod
+cd /data1/gamerhead
 
 # 添加执行权限
 chmod +x deploy.sh
