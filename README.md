@@ -1,7 +1,3 @@
-<div align="center">
-<img width="1200" height="475" alt="GamerHeads Banner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
-
 # GamerHeads - AI Video Generation App
 
 This repository contains the source code for **GamerHeads**, a web application that leverages Google's Gemini models (including Veo for video generation) to create dynamic video content. The project is designed to be easily deployed to your own Google Cloud Platform (GCP) environment via Cloud Run.
@@ -15,28 +11,6 @@ This repository contains the source code for **GamerHeads**, a web application t
 - **Built-in Authentication:** Protect your application either using Google Identity-Aware Proxy (IAP) or simple Basic Authentication (Fixed Username/Password).
 - **One-Click Deployment:** A comprehensive `deploy.sh` script automates GCP Cloud Build, Cloud Run deployment, Datastore setup, and IAM permissions.
 
----
-
-## 💻 Local Development
-
-**Prerequisites:**  
-- [Node.js](https://nodejs.org/) (v20+ recommended)
-
-1. **Install dependencies:**
-   ```bash
-   npm install
-   ```
-2. **Set your API Key:**
-   Create a `.env.local` file in the root directory (or edit the existing one) and add your Gemini API key:
-   ```env
-   VITE_GEMINI_API_KEY=your_gemini_api_key_here
-   ```
-3. **Run the app locally:**
-   ```bash
-   npm run dev
-   ```
-
----
 
 ## ☁️ Deployment to Google Cloud Platform (GCP)
 
