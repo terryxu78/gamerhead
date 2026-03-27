@@ -210,10 +210,6 @@ export const constructVeoGenerationPrompt = (
     DIALOGUE:
     ${audioPrompt}
     
-    STYLE & QUALITY:
-    - Photorealistic, 4k, high fidelity.
-    - Shallow depth of field (background blurred).
-    
     STRICT TECHNICAL CONSTRAINTS (MUST FOLLOW):
     1. CAMERA: **TRIPOD SHOT**. LOCKED OFF. ABSOLUTELY NO CAMERA MOVEMENT. NO ZOOM. NO PAN.
     2. CONTINUITY: Single continuous take. No cuts.
@@ -222,6 +218,11 @@ export const constructVeoGenerationPrompt = (
     5. AUDIO: ${hasDialogue ? 'Speech only.' : 'Silence.'} NO MUSIC. NO SFX.
     6. DURATION: Exactly ${durationSeconds} seconds.
     7. NEGATIVE PROMPT: No gameplay footage. No video game UI. No HUD. No CGI characters next to streamer. No music. No SFX. No camera movements. No scene cuts. No graphics or animations.
-    7. [IF APPLICABLE] GAMING PHONE STABILITY: STREAMER DOES NOT ROTATE THE PHONE THAT THEY ARE HOLDING. DEVICE ORIENTATION IS FIXED AT ALL TIMES
+    8. [IF APPLICABLE] GAMING PHONE STABILITY: STREAMER DOES NOT ROTATE THE PHONE THAT THEY ARE HOLDING. DEVICE ORIENTATION IS FIXED AT ALL TIMES
+    
+    STYLE & QUALITY:
+    - Photorealistic, 4k, high fidelity.
+    - Shallow depth of field (background blurred).
+    
     `;
 };

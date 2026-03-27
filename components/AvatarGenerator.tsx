@@ -154,6 +154,8 @@ const AvatarGenerator: React.FC<AvatarGeneratorProps> = ({ externalConfig, setEx
             />
           </div>
 
+          {/* Model Selection Removed */}
+
           <div>
              <div className="flex justify-between items-center mb-3">
                  <label className="block text-sm font-bold text-gray-300">Aspect Ratio</label>

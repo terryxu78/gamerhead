@@ -398,9 +398,9 @@ export const compositePipVideo = async (
   let overlayX = 0, overlayY = 0, overlayWidth = 0, overlayHeight = 0;
   
   if (layout === 'classic-pip') {
-      // 15% Area
+      // 10% Area (Reduced to 0.1 multiplier)
       const totalArea = width * height;
-      const targetArea = totalArea * 0.15;
+      const targetArea = totalArea * 0.1;
       const overlayAspectRatio = overlayVideo.videoWidth / overlayVideo.videoHeight;
       
       overlayWidth = Math.sqrt(targetArea * overlayAspectRatio);
@@ -652,7 +652,7 @@ export const compositePipVideo = async (
              ctx.lineTo(overlayX + overlayWidth, overlayY + overlayHeight - radius);
              ctx.quadraticCurveTo(overlayX + overlayWidth, overlayY + overlayHeight, overlayX + overlayWidth - radius, overlayY + overlayHeight);
              ctx.lineTo(overlayX + radius, overlayY + overlayHeight);
-             ctx.quadraticCurveTo(overlayX, overlayY, overlayX, overlayY + overlayHeight - radius);
+             ctx.quadraticCurveTo(overlayX, overlayY + overlayHeight, overlayX, overlayY + overlayHeight - radius);
              ctx.lineTo(overlayX, overlayY + radius);
              ctx.quadraticCurveTo(overlayX, overlayY, overlayX + radius, overlayY);
              ctx.closePath();
