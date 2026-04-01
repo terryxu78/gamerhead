@@ -258,6 +258,7 @@ apiRouter.get('/admin/stats', async (req, res) => {
 const GCP_PROJECT_ID = process.env.GCP_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT;
 const GCP_LOCATION = process.env.GCP_LOCATION || 'us-central1';
 
+// Regional client (us-central1) — for text/multimodal Gemini models
 const getVertexAIClient = () => {
     if (!GCP_PROJECT_ID) {
         throw new Error('GCP_PROJECT_ID / GOOGLE_CLOUD_PROJECT environment variable is not set.');
@@ -265,7 +266,19 @@ const getVertexAIClient = () => {
     return new GoogleGenAI({
         vertexai: true,
         project: GCP_PROJECT_ID,
-        location: GCP_LOCATION
+        location: GCP_LOCATION   // e.g. us-central1
+    });
+};
+
+// Global client — required for gemini-3.1-flash-image-preview and Veo models
+const getVertexAIGlobalClient = () => {
+    if (!GCP_PROJECT_ID) {
+        throw new Error('GCP_PROJECT_ID / GOOGLE_CLOUD_PROJECT environment variable is not set.');
+    }
+    return new GoogleGenAI({
+        vertexai: true,
+        project: GCP_PROJECT_ID,
+        location: 'global'
     });
 };
 
@@ -294,15 +307,6 @@ const getAccessToken = async () => {
         throw new Error('Cannot obtain access token. Ensure ADC is configured: ' + e.message);
     }
 };
-
-// Map AI Studio preview model names → Vertex AI GA model names
-const VERTEX_MODEL_MAP = {
-    'gemini-3.1-flash-image-preview': 'gemini-2.0-flash-exp',  // Image generation
-    'gemini-3-flash-preview':         'gemini-2.5-flash-preview-04-17',  // Text
-    'gemini-3-flash':                 'gemini-2.5-flash-preview-04-17',
-    'gemini-flash-image':             'gemini-2.0-flash-exp',
-};
-const resolveModel = (model, fallback) => VERTEX_MODEL_MAP[model] || model || fallback;
 
 // Safety settings for image generation
 const SAFETY_SETTINGS_BLOCK_NONE = [
@@ -402,14 +406,14 @@ apiRouter.post('/gemini/generate-avatar', async (req, res) => {
     if (!prompt) return res.status(400).json({ error: 'prompt is required' });
 
     try {
-        const ai = getVertexAIClient();
         const parts = [{ text: prompt }];
         if (referenceImageData) {
             parts.push({ inlineData: { mimeType: referenceImageMime || 'image/png', data: referenceImageData } });
         }
 
-        const resolvedModel = resolveModel(model, 'gemini-2.0-flash-exp');
-        console.log(`[Gemini] Avatar model: ${model} → ${resolvedModel}`);
+        const ai = getVertexAIGlobalClient();   // Image model requires global endpoint
+        const resolvedModel = model || 'gemini-3.1-flash-image-preview';
+        console.log(`[Gemini] Avatar model: ${resolvedModel} (global endpoint)`);
         const response = await ai.models.generateContent({
             model: resolvedModel,
             contents: { parts },
@@ -446,7 +450,7 @@ apiRouter.post('/gemini/generate-video', async (req, res) => {
     if (!prompt || !imageBase64) return res.status(400).json({ error: 'prompt and imageBase64 are required' });
 
     try {
-        const ai = getVertexAIClient();
+        const ai = getVertexAIGlobalClient();  // Veo requires global endpoint
         const veoModel = model || 'veo-3.1-generate-preview';
         const veoRatio = aspectRatio === '9:16' ? '9:16' : '16:9';
 
@@ -480,7 +484,7 @@ apiRouter.get('/gemini/video-operation', async (req, res) => {
     if (!name) return res.status(400).json({ error: 'name is required' });
 
     try {
-        const ai = getVertexAIClient();
+        const ai = getVertexAIGlobalClient();  // Veo operations also use global endpoint
         const operation = await ai.operations.getVideosOperation({ operation: { name } });
 
         if (!operation.done) {
