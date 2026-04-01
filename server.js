@@ -295,6 +295,15 @@ const getAccessToken = async () => {
     }
 };
 
+// Map AI Studio preview model names → Vertex AI GA model names
+const VERTEX_MODEL_MAP = {
+    'gemini-3.1-flash-image-preview': 'gemini-2.0-flash-exp',  // Image generation
+    'gemini-3-flash-preview':         'gemini-2.5-flash-preview-04-17',  // Text
+    'gemini-3-flash':                 'gemini-2.5-flash-preview-04-17',
+    'gemini-flash-image':             'gemini-2.0-flash-exp',
+};
+const resolveModel = (model, fallback) => VERTEX_MODEL_MAP[model] || model || fallback;
+
 // Safety settings for image generation
 const SAFETY_SETTINGS_BLOCK_NONE = [
     { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
@@ -399,8 +408,10 @@ apiRouter.post('/gemini/generate-avatar', async (req, res) => {
             parts.push({ inlineData: { mimeType: referenceImageMime || 'image/png', data: referenceImageData } });
         }
 
+        const resolvedModel = resolveModel(model, 'gemini-2.0-flash-exp');
+        console.log(`[Gemini] Avatar model: ${model} → ${resolvedModel}`);
         const response = await ai.models.generateContent({
-            model: model || 'gemini-2.0-flash-exp',
+            model: resolvedModel,
             contents: { parts },
             config: {
                 temperature: 0.5,

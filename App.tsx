@@ -35,7 +35,7 @@ const GameHeads: React.FC<{ onReset: () => void }> = ({ onReset }) => {
       appearance: '',
       setting: '',
       aspectRatio: '16:9',
-      model: 'gemini-3.1-flash-image-preview'
+      model: 'gemini-2.0-flash-exp'   // Vertex AI image generation model
   });
   
   const [generatedAvatarImage, setGeneratedAvatarImage] = useState<string | null>(null);
