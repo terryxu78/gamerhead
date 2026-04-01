@@ -8,7 +8,7 @@
 gcloud version
 
 # 检查Node.js (本地测试用)
-node --version  # 应该 >= 20.0.0
+node --version  #  >= 20.0.0
 ```
 
 ### 2. 登录Google Cloud
@@ -19,6 +19,11 @@ gcloud auth login
 # 设置项目
 gcloud config set project YOUR_PROJECT_ID
 ```
+### 3. python环境 
+>Python 3.11
+
+### 4. 页面调用环境
+非大陆和香港的IP 
 
 ---
 
@@ -27,8 +32,7 @@ gcloud config set project YOUR_PROJECT_ID
 ### 使用自动化脚本
 
 ```bash
-cd /data1/gamerhead
-
+cd gamerhead
 # 添加执行权限
 chmod +x deploy.sh
 
@@ -42,6 +46,8 @@ chmod +x deploy.sh
 - ✅ 区域选择
 - ✅ API Key配置
 - ✅ 自动启用所需API
+- ✅ 选择登录方式
+- ✅ 填写固定用户名和密码
 - ✅ 一键部署
 
 ---
@@ -102,6 +108,16 @@ curl https://YOUR_SERVICE_URL/api/health
 
 ```bash
 # 创建API Key secret
+网站 https://aistudio-preprod.corp.google.com/app
+#
+确保账号在GCP 项目中，有Owner (所有者) 或 Editor (编辑者)：这两个基本角色拥有创建 API Key 所需的所有权限。
+如果自定义/精细权限：不想给过高的权限，至少需要授予：
+
+API Keys Admin (roles/serviceusage.apiKeysAdmin)：允许创建、删除和管理 API Key。
+Service Usage Admin (roles/serviceusage.serviceUsageAdmin)：用于在项目中启用相关的 API。
+然后
+Go to Get API key->create a new key->import GCP project
+
 echo -n "YOUR_GEMINI_API_KEY" | \
   gcloud secrets create gemini-api-key --data-file=-
 

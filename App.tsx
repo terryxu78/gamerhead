@@ -5,7 +5,7 @@ import AvatarGenerator from './components/AvatarGenerator';
 import Studio from './components/Studio';
 import AdminDashboard from './components/AdminDashboard';
 import { GameInfo, ScriptResult, AvatarConfig, TargetAspectRatio, VeoSegment } from './types';
-import { generateStreamerScript, analyzeScriptForVeo, getEffectiveApiKey } from './services/gemini';
+import { generateStreamerScript, analyzeScriptForVeo } from './services/gemini';
 import { getUserId } from './services/logging';
 import NeonButton from './components/NeonButton';
 
@@ -13,15 +13,8 @@ import NeonButton from './components/NeonButton';
 // This component is fully unmounted and remounted on reset
 const GameHeads: React.FC<{ onReset: () => void }> = ({ onReset }) => {
   const [activeTab, setActiveTab] = useState<'script' | 'avatar' | 'studio' | 'admin'>('script');
-  const [keyError, setKeyError] = useState<string | null>(null);
-
-  // Check key on mount (Just for alerting, not for editing)
+  // Ensure user ID exists on mount
   useEffect(() => {
-      const key = getEffectiveApiKey();
-      if (!key) {
-          setKeyError("CRITICAL: GEMINI_API_KEY is missing in this deployment. The app will not function correctly.");
-      }
-      // Ensure user ID exists
       getUserId();
   }, []);
 
@@ -171,11 +164,6 @@ const GameHeads: React.FC<{ onReset: () => void }> = ({ onReset }) => {
     console.log("[App] Starting script generation...");
 
     try {
-      const apiKey = getEffectiveApiKey();
-      if (!apiKey) {
-          throw new Error("API Key is missing. Please check deployment configuration.");
-      }
-
       let cachedData = undefined;
       if (form.videoFile && cachedVideo && form.videoFile === cachedVideo.file) {
           cachedData = { data: cachedVideo.data, mimeType: cachedVideo.mimeType };
@@ -220,13 +208,6 @@ const GameHeads: React.FC<{ onReset: () => void }> = ({ onReset }) => {
   return (
     <div className="min-h-screen bg-google-background text-google-text font-sans flex flex-col">
       
-      {/* Critical Env Error Banner */}
-      {keyError && (
-          <div className="bg-red-900/80 text-white text-center p-3 font-bold border-b border-red-700">
-              {keyError}
-          </div>
-      )}
-
       {/* Reset Confirmation Modal */}
       {showResetConfirm && (
         <div className="fixed inset-0 z-[100] bg-black/80 flex items-center justify-center p-4 backdrop-blur-sm animate-fade-in">

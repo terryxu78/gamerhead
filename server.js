@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 import fs from 'fs';
 import { Datastore } from '@google-cloud/datastore';
 import compression from 'compression';
+import { GoogleGenAI, Type } from '@google/genai';
 
 // --- CONFIGURATION ---
 const __filename = fileURLToPath(import.meta.url);
@@ -50,7 +51,7 @@ app.use((req, res, next) => {
 
 app.set('trust proxy', true);
 app.use(compression());
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
 
 // --- AUTHENTICATION & USER IDENTITY MIDDLEWARE ---
 const basicAuthUsersStr = process.env.BASIC_AUTH_USERS;
@@ -250,6 +251,282 @@ apiRouter.get('/admin/stats', async (req, res) => {
     }
 });
 
+// ============================================================
+// VERTEX AI GEMINI PROXY ROUTES
+// ============================================================
+
+const GCP_PROJECT_ID = process.env.GCP_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT;
+const GCP_LOCATION = process.env.GCP_LOCATION || 'us-central1';
+
+const getVertexAIClient = () => {
+    if (!GCP_PROJECT_ID) {
+        throw new Error('GCP_PROJECT_ID / GOOGLE_CLOUD_PROJECT environment variable is not set.');
+    }
+    return new GoogleGenAI({
+        vertexai: true,
+        project: GCP_PROJECT_ID,
+        location: GCP_LOCATION
+    });
+};
+
+// Get ADC access token for authenticated video download
+// Works on Cloud Run (metadata server) and local dev (ADC / GOOGLE_APPLICATION_CREDENTIALS)
+const getAccessToken = async () => {
+    // 1. Try GCE/Cloud Run metadata server first
+    try {
+        const resp = await fetch(
+            'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token',
+            { headers: { 'Metadata-Flavor': 'Google' }, signal: AbortSignal.timeout(3000) }
+        );
+        if (resp.ok) {
+            const { access_token } = await resp.json();
+            return access_token;
+        }
+    } catch (_) { /* not on GCE, try ADC */ }
+
+    // 2. Fallback: google-auth-library (transitive dep from @google-cloud/datastore)
+    try {
+        const { GoogleAuth } = await import('google-auth-library');
+        const auth = new GoogleAuth({ scopes: ['https://www.googleapis.com/auth/cloud-platform'] });
+        const token = await auth.getAccessToken();
+        return token;
+    } catch (e) {
+        throw new Error('Cannot obtain access token. Ensure ADC is configured: ' + e.message);
+    }
+};
+
+// Safety settings for image generation
+const SAFETY_SETTINGS_BLOCK_NONE = [
+    { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
+    { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
+    { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
+    { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
+];
+
+// POST /api/gemini/generate-script
+// Body: { prompt: string, inlineData?: { data: string, mimeType: string }, videoMimeType?: string }
+apiRouter.post('/gemini/generate-script', async (req, res) => {
+    const { prompt, inlineData, videoMimeType } = req.body;
+    if (!prompt) return res.status(400).json({ error: 'prompt is required' });
+
+    try {
+        const ai = getVertexAIClient();
+        const parts = [{ text: prompt }];
+        if (inlineData) parts.push({ inlineData });
+
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash-preview-04-17',
+            contents: { parts },
+            config: {
+                thinkingConfig: { thinkingBudget: 1024 },
+                tools: [{ googleSearch: {} }],
+                systemInstruction: 'You are an expert content creator scriptwriter. Use the provided context to generate the script.',
+            }
+        });
+
+        const fullText = response.text || 'No script generated.';
+        const groundingUrls = [];
+        if (response.candidates?.[0]?.groundingMetadata?.groundingChunks) {
+            response.candidates[0].groundingMetadata.groundingChunks.forEach(chunk => {
+                if (chunk.web?.uri) groundingUrls.push(chunk.web.uri);
+            });
+        }
+
+        res.json({ fullText, groundingUrls, inlineData: inlineData || null });
+    } catch (err) {
+        console.error('[Gemini] generate-script error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// POST /api/gemini/analyze-script
+// Body: { prompt: string }
+apiRouter.post('/gemini/analyze-script', async (req, res) => {
+    const { prompt } = req.body;
+    if (!prompt) return res.status(400).json({ error: 'prompt is required' });
+
+    try {
+        const ai = getVertexAIClient();
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash-preview-04-17',
+            contents: prompt,
+            config: {
+                responseMimeType: 'application/json',
+                responseSchema: {
+                    type: Type.ARRAY,
+                    items: {
+                        type: Type.OBJECT,
+                        properties: {
+                            id: { type: Type.INTEGER },
+                            startTime: { type: Type.STRING },
+                            endTime: { type: Type.STRING },
+                            duration: { type: Type.INTEGER },
+                            prompt: { type: Type.STRING },
+                            dialogue: { type: Type.STRING }
+                        },
+                        required: ['id', 'startTime', 'endTime', 'duration', 'prompt', 'dialogue']
+                    }
+                }
+            }
+        });
+
+        const rawSegments = JSON.parse(response.text || '[]');
+        const validatedSegments = rawSegments.map(seg => {
+            let d = seg.duration;
+            if (d <= 4) d = 4;
+            else if (d <= 6) d = 6;
+            else d = 8;
+            return { ...seg, duration: d };
+        });
+
+        res.json(validatedSegments);
+    } catch (err) {
+        console.error('[Gemini] analyze-script error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// POST /api/gemini/generate-avatar
+// Body: { prompt: string, model: string, aspectRatio: string, referenceImageData?: string, referenceImageMime?: string }
+apiRouter.post('/gemini/generate-avatar', async (req, res) => {
+    const { prompt, model, aspectRatio, referenceImageData, referenceImageMime } = req.body;
+    if (!prompt) return res.status(400).json({ error: 'prompt is required' });
+
+    try {
+        const ai = getVertexAIClient();
+        const parts = [{ text: prompt }];
+        if (referenceImageData) {
+            parts.push({ inlineData: { mimeType: referenceImageMime || 'image/png', data: referenceImageData } });
+        }
+
+        const response = await ai.models.generateContent({
+            model: model || 'gemini-2.0-flash-exp',
+            contents: { parts },
+            config: {
+                temperature: 0.5,
+                responseModalities: ['IMAGE', 'TEXT'],
+                imageConfig: {
+                    aspectRatio: aspectRatio || '16:9',
+                    imageSize: '1K'
+                },
+                safetySettings: SAFETY_SETTINGS_BLOCK_NONE
+            }
+        });
+
+        if (response.candidates?.[0]?.content?.parts) {
+            for (const part of response.candidates[0].content.parts) {
+                if (part.inlineData) {
+                    return res.json({ imageData: `data:${part.inlineData.mimeType};base64,${part.inlineData.data}` });
+                }
+            }
+        }
+        res.status(500).json({ error: 'No image generated in response' });
+    } catch (err) {
+        console.error('[Gemini] generate-avatar error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// POST /api/gemini/generate-video
+// Body: { prompt, imageBase64, aspectRatio, durationSeconds, model, systemInstruction }
+// Returns: { operationName: string }
+apiRouter.post('/gemini/generate-video', async (req, res) => {
+    const { prompt, imageBase64, aspectRatio, durationSeconds, model, systemInstruction } = req.body;
+    if (!prompt || !imageBase64) return res.status(400).json({ error: 'prompt and imageBase64 are required' });
+
+    try {
+        const ai = getVertexAIClient();
+        const veoModel = model || 'veo-3.1-generate-preview';
+        const veoRatio = aspectRatio === '9:16' ? '9:16' : '16:9';
+
+        const config = {
+            numberOfVideos: 1,
+            resolution: '720p',
+            aspectRatio: veoRatio,
+            durationSeconds: durationSeconds || 6,
+        };
+        if (systemInstruction) config.systemInstruction = systemInstruction;
+
+        const operation = await ai.models.generateVideos({
+            model: veoModel,
+            prompt,
+            image: { imageBytes: imageBase64, mimeType: 'image/png' },
+            config
+        });
+
+        // Return the operation name for client-side polling
+        res.json({ operationName: operation.name });
+    } catch (err) {
+        console.error('[Gemini] generate-video error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// GET /api/gemini/video-operation?name=xxx
+// Returns: { done: bool, videoUri?: string, error?: string }
+apiRouter.get('/gemini/video-operation', async (req, res) => {
+    const { name } = req.query;
+    if (!name) return res.status(400).json({ error: 'name is required' });
+
+    try {
+        const ai = getVertexAIClient();
+        const operation = await ai.operations.getVideosOperation({ operation: { name } });
+
+        if (!operation.done) {
+            return res.json({ done: false });
+        }
+        if (operation.error) {
+            return res.json({ done: true, error: operation.error.message || 'Video generation failed' });
+        }
+
+        const videoUri = operation.response?.generatedVideos?.[0]?.video?.uri;
+        if (!videoUri) {
+            return res.json({ done: true, error: 'No video URI returned from API' });
+        }
+        res.json({ done: true, videoUri });
+    } catch (err) {
+        console.error('[Gemini] video-operation error:', err);
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// GET /api/gemini/download-video?uri=xxx
+// Fetches video using ADC token and streams to client
+apiRouter.get('/gemini/download-video', async (req, res) => {
+    const { uri } = req.query;
+    if (!uri) return res.status(400).json({ error: 'uri is required' });
+
+    try {
+        const token = await getAccessToken();
+        const videoResp = await fetch(uri, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+
+        if (!videoResp.ok) {
+            const errText = await videoResp.text().catch(() => videoResp.statusText);
+            console.error(`[Gemini] Video download failed (${videoResp.status}):`, errText);
+            return res.status(videoResp.status).json({ error: `Download failed: ${errText}` });
+        }
+
+        const contentType = videoResp.headers.get('content-type') || 'video/mp4';
+        res.setHeader('Content-Type', contentType);
+        res.setHeader('Cache-Control', 'no-store');
+
+        // Stream the response body to the client
+        const reader = videoResp.body.getReader();
+        const pump = async () => {
+            const { done, value } = await reader.read();
+            if (done) { res.end(); return; }
+            res.write(Buffer.from(value));
+            await pump();
+        };
+        await pump();
+    } catch (err) {
+        console.error('[Gemini] download-video error:', err);
+        if (!res.headersSent) res.status(500).json({ error: err.message });
+    }
+});
+
 app.use('/api', apiRouter);
 
 // Catch-all for API 404s
@@ -296,13 +573,8 @@ const startServer = async () => {
         // SPA Fallback
         app.get('*', (req, res) => {
             if (fs.existsSync(indexHtmlPath)) {
-                let html = fs.readFileSync(indexHtmlPath, 'utf-8');
-                const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY || "";
-                html = html.replace(
-                    '<!--ENV_INJECTION_POINT-->', 
-                    `<script>window.GEMINI_API_KEY = "${apiKey}";</script>`
-                );
-                res.send(html);
+                // No API key injection needed — using Vertex AI via server-side proxy
+                res.sendFile(indexHtmlPath);
             } else {
                 res.status(500).send("Server Error: Build Output Missing. Check build logs.");
             }
