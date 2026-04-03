@@ -55,7 +55,7 @@ const Studio: React.FC<StudioProps> = ({
   const [audioVolumes, setAudioVolumes] = useState({ streamer: 1.2, gameplay: 0.4 });
 
   // Veo Model Selection
-  const [veoModel, setVeoModel] = useState<'veo-3.1-generate-preview' | 'veo-3.1-fast-generate-preview'>('veo-3.1-generate-preview');
+  const [veoModel, setVeoModel] = useState<'veo-3.1-generate-001' | 'veo-3.1-fast-generate-001'>('veo-3.1-generate-001');
 
   const handleDownloadScript = () => {
       if (!scriptResult) return;
@@ -432,21 +432,21 @@ const Studio: React.FC<StudioProps> = ({
                 {/* Left: Model Selector */}
                 <div className="pointer-events-auto bg-[#2D2D2D] p-1.5 rounded-xl border border-gray-700 shadow-float backdrop-blur-md">
                      <div className="flex gap-1">
-                        <button 
-                            onClick={() => setVeoModel('veo-3.1-generate-preview')}
+                        <button
+                            onClick={() => setVeoModel('veo-3.1-generate-001')}
                             className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                                veoModel === 'veo-3.1-generate-preview' 
-                                ? 'bg-google-blue text-gray-900 shadow-sm' 
+                                veoModel === 'veo-3.1-generate-001'
+                                ? 'bg-google-blue text-gray-900 shadow-sm'
                                 : 'text-gray-400 hover:text-white hover:bg-white/5'
                             }`}
                         >
                             Veo 3.1 Standard
                         </button>
-                        <button 
-                             onClick={() => setVeoModel('veo-3.1-fast-generate-preview')}
+                        <button
+                             onClick={() => setVeoModel('veo-3.1-fast-generate-001')}
                              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1 ${
-                                veoModel === 'veo-3.1-fast-generate-preview' 
-                                ? 'bg-google-green text-gray-900 shadow-sm' 
+                                veoModel === 'veo-3.1-fast-generate-001'
+                                ? 'bg-google-green text-gray-900 shadow-sm'
                                 : 'text-gray-400 hover:text-white hover:bg-white/5'
                             }`}
                         >

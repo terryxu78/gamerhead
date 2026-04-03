@@ -5,6 +5,7 @@ import {
     LineChart, Line, CartesianGrid, Legend 
 } from 'recharts';
 import { LogEntry } from '../types';
+import { apiFetch } from '../services/auth';
 
 interface DashboardStats {
     totalGenerations: number;
@@ -64,7 +65,7 @@ const AdminDashboard: React.FC = () => {
                 to: endD.toISOString()
             });
 
-            const res = await fetch(`/api/admin/stats?${query}`);
+            const res = await apiFetch(`/api/admin/stats?${query}`);
             if (!res.ok) throw new Error("Failed to fetch logs");
             
             const data = await res.json();
@@ -152,7 +153,7 @@ const AdminDashboard: React.FC = () => {
                 
                 // Model Usage
                 if (log.model) {
-                    const mName = log.model.replace('gemini-', '').replace('veo-', '');
+                    const mName = log.model.replace('gemini-', 'gemini ').replace('veo-', 'veo ');
                     modelMap[mName] = (modelMap[mName] || 0) + 1;
                 }
             }
@@ -164,7 +165,7 @@ const AdminDashboard: React.FC = () => {
             }
             // Add specific model count to daily entry
             if (log.model) {
-                 const mName = log.model.replace('gemini-', '').replace('veo-', '');
+                 const mName = log.model.replace('gemini-', 'gemini ').replace('veo-', 'veo ');
                  dailyMap[dateKey][mName] = (dailyMap[dateKey][mName] || 0) + 1;
             }
         });
@@ -202,13 +203,14 @@ const AdminDashboard: React.FC = () => {
     };
 
     const handleExportCSV = () => {
-        const headers = ["Timestamp", "User Email/ID", "Type", "Model", "Status"];
+        const headers = ["Timestamp", "User Email/ID", "Type", "Model", "Status", "File Details"];
         const rows = filteredLogs.map(log => [
             new Date(log.timestamp).toISOString(),
             log.userEmail || log.userId || 'N/A',
             log.type,
             log.model,
-            log.status
+            log.status,
+            log.meta?.gcsUri || ''
         ]);
         const csvContent = "data:text/csv;charset=utf-8," + headers.join(",") + "\n" + rows.map(e => e.join(",")).join("\n");
         const encodedUri = encodeURI(csvContent);
@@ -390,7 +392,7 @@ const AdminDashboard: React.FC = () => {
                                     { label: 'Model', key: 'model' },
                                     { label: 'Status', key: 'status' }
                                 ].map((col) => (
-                                    <th 
+                                    <th
                                         key={col.key}
                                         className="px-6 py-4 cursor-pointer hover:text-white transition-colors select-none"
                                         onClick={() => handleSort(col.key as keyof LogEntry)}
@@ -403,6 +405,7 @@ const AdminDashboard: React.FC = () => {
                                         </div>
                                     </th>
                                 ))}
+                                <th className="px-6 py-4 select-none">File Details</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-700">
@@ -425,7 +428,7 @@ const AdminDashboard: React.FC = () => {
                                         </span>
                                     </td>
                                     <td className="px-6 py-4 text-xs font-medium text-gray-300">
-                                        {log.model.replace('gemini-','').replace('veo-','')}
+                                        {log.model.replace('gemini-','gemini ').replace('veo-','veo ')}
                                     </td>
                                     <td className="px-6 py-4">
                                         <div className="flex items-center gap-2">
@@ -435,11 +438,31 @@ const AdminDashboard: React.FC = () => {
                                             </span>
                                         </div>
                                     </td>
+                                    <td className="px-6 py-4 text-xs">
+                                        {log.meta?.gcsUri ? (() => {
+                                            const uri: string = log.meta.gcsUri;
+                                            const shortLabel = uri.split('/').pop() || uri;
+                                            const signedUrlEndpoint = `/api/admin/signed-url?uri=${encodeURIComponent(uri)}`;
+                                            return (
+                                                <a
+                                                    href={signedUrlEndpoint}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    title={uri}
+                                                    className="text-google-blue hover:text-google-blueHover underline underline-offset-2 font-mono"
+                                                >
+                                                    {shortLabel}
+                                                </a>
+                                            );
+                                        })() : (
+                                            <span className="text-gray-700">—</span>
+                                        )}
+                                    </td>
                                 </tr>
                             ))}
                             {sortedLogs.length === 0 && (
                                 <tr>
-                                    <td colSpan={5} className="px-6 py-12 text-center text-gray-600">
+                                    <td colSpan={6} className="px-6 py-12 text-center text-gray-600">
                                         No activity found for the selected period.
                                     </td>
                                 </tr>

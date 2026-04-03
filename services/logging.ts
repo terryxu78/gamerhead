@@ -21,9 +21,13 @@ export const logEvent = async (
     try {
         const userId = getUserId();
         // Fire and forget
+        const token = sessionStorage.getItem('gh_id_token');
         fetch('/api/log', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: {
+                'Content-Type': 'application/json',
+                ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+            },
             body: JSON.stringify({
                 userId,
                 type,

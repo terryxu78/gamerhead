@@ -1,5 +1,5 @@
 
-import React, { useState, useCallback, useMemo, useEffect } from 'react';
+import React, { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import ProjectForm from './components/ProjectForm';
 import AvatarGenerator from './components/AvatarGenerator';
 import Studio from './components/Studio';
@@ -8,10 +8,19 @@ import { GameInfo, ScriptResult, AvatarConfig, TargetAspectRatio, VeoSegment } f
 import { generateStreamerScript, analyzeScriptForVeo } from './services/gemini';
 import { getUserId } from './services/logging';
 import NeonButton from './components/NeonButton';
+import {
+    initGoogleSignIn,
+    renderGoogleButton,
+    promptOneTap,
+    signOut,
+    getStoredToken,
+    storeToken,
+    GoogleUser,
+} from './services/auth';
 
 // Internal Component containing the full app logic
 // This component is fully unmounted and remounted on reset
-const GameHeads: React.FC<{ onReset: () => void }> = ({ onReset }) => {
+const GameHeads: React.FC<{ onReset: () => void; currentUser: GoogleUser | null; onSignOut?: () => void }> = ({ onReset, currentUser, onSignOut }) => {
   const [activeTab, setActiveTab] = useState<'script' | 'avatar' | 'studio' | 'admin'>('script');
   // Ensure user ID exists on mount
   useEffect(() => {
@@ -282,6 +291,20 @@ const GameHeads: React.FC<{ onReset: () => void }> = ({ onReset }) => {
                 <span className="text-[10px] font-bold text-google-green bg-green-900/20 px-3 py-1.5 rounded-full border border-green-800 flex items-center gap-1">
                     ⚡ Powered by Nano Banana & Veo 3.1
                 </span>
+                {currentUser && onSignOut && (
+                    <div className="flex items-center gap-2">
+                        {currentUser.picture && (
+                            <img src={currentUser.picture} alt={currentUser.name} className="w-7 h-7 rounded-full border border-gray-600" />
+                        )}
+                        <span className="text-xs text-gray-400 hidden sm:block">{currentUser.email}</span>
+                        <button
+                            onClick={onSignOut}
+                            className="text-xs text-gray-400 hover:text-white px-2 py-1 rounded border border-gray-700 hover:bg-gray-700 transition-colors"
+                        >
+                            Sign out
+                        </button>
+                    </div>
+                )}
             </div>
           </div>
           
@@ -451,18 +474,121 @@ const GameHeads: React.FC<{ onReset: () => void }> = ({ onReset }) => {
   );
 };
 
+// -----------------------------------------------------------------------
+// Google Sign-In wrapper
+// -----------------------------------------------------------------------
+const LoginPage: React.FC<{ clientId: string; onSignedIn: (user: GoogleUser, token: string) => void }> = ({ clientId, onSignedIn }) => {
+    const btnRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        initGoogleSignIn(clientId, async (idToken) => {
+            // Verify token with backend and get user info
+            try {
+                const res = await fetch('/api/auth/verify', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ idToken }),
+                });
+                if (!res.ok) {
+                    const { error } = await res.json().catch(() => ({ error: 'Access denied' }));
+                    alert(error || 'Access denied. Your account is not authorized.');
+                    return;
+                }
+                const user: GoogleUser = await res.json();
+                storeToken(idToken);
+                onSignedIn(user, idToken);
+            } catch {
+                alert('Sign-in failed. Please try again.');
+            }
+        });
+
+        if (btnRef.current) renderGoogleButton(btnRef.current);
+        promptOneTap();
+    }, [clientId, onSignedIn]);
+
+    return (
+        <div className="min-h-screen bg-[#121212] flex flex-col items-center justify-center gap-8">
+            <div className="flex items-center gap-3">
+                <span className="text-5xl">👾</span>
+                <h1 className="text-4xl font-black text-white">
+                    <span className="bg-clip-text text-transparent bg-gradient-to-r from-google-blue to-google-green">Gamer</span>Heads
+                </h1>
+            </div>
+            <p className="text-gray-400 text-sm">Sign in with your Google account to continue</p>
+            <div ref={btnRef} />
+        </div>
+    );
+};
+
 const App: React.FC = () => {
     const [sessionKey, setSessionKey] = useState(0);
     const [isResetting, setIsResetting] = useState(false);
 
+    // Google Sign-In state
+    const [googleClientId, setGoogleClientId] = useState<string | null>(null);
+    const [currentUser, setCurrentUser] = useState<GoogleUser | null>(null);
+    const [authLoading, setAuthLoading] = useState(true);
+
+    // Fetch server config (googleClientId) on mount
+    useEffect(() => {
+        fetch('/api/config')
+            .then(r => r.json())
+            .then(cfg => {
+                if (cfg.googleClientId) {
+                    setGoogleClientId(cfg.googleClientId);
+                    // Restore session if token still present
+                    const token = getStoredToken();
+                    if (token) {
+                        fetch('/api/auth/verify', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ idToken: token }),
+                        })
+                            .then(r => r.ok ? r.json() : null)
+                            .then(user => { if (user) setCurrentUser(user); })
+                            .catch(() => {})
+                            .finally(() => setAuthLoading(false));
+                    } else {
+                        setAuthLoading(false);
+                    }
+                } else {
+                    // No Google auth configured — open access
+                    setAuthLoading(false);
+                }
+            })
+            .catch(() => setAuthLoading(false));
+    }, []);
+
+    const handleSignedIn = useCallback((user: GoogleUser) => {
+        setCurrentUser(user);
+    }, []);
+
+    const handleSignOut = useCallback(() => {
+        signOut();
+        setCurrentUser(null);
+    }, []);
+
     const handleReset = useCallback(() => {
         setIsResetting(true);
-        window.scrollTo(0,0);
+        window.scrollTo(0, 0);
         setTimeout(() => {
             setSessionKey(prev => prev + 1);
             setIsResetting(false);
         }, 50);
     }, []);
+
+    if (authLoading) {
+        return (
+            <div className="min-h-screen bg-[#121212] flex items-center justify-center">
+                <div className="w-8 h-8 border-2 border-google-blue border-t-transparent rounded-full animate-spin"></div>
+            </div>
+        );
+    }
+
+    // Google auth is enabled but user is not signed in
+    if (googleClientId && !currentUser) {
+        return <LoginPage clientId={googleClientId} onSignedIn={handleSignedIn} />;
+    }
 
     if (isResetting) {
         return (
@@ -472,7 +598,7 @@ const App: React.FC = () => {
         );
     }
 
-    return <GameHeads key={sessionKey} onReset={handleReset} />;
+    return <GameHeads key={sessionKey} onReset={handleReset} currentUser={currentUser} onSignOut={googleClientId ? handleSignOut : undefined} />;
 };
 
 export default App;

@@ -4,6 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs';
 import { Datastore } from '@google-cloud/datastore';
+import { Storage } from '@google-cloud/storage';
 import compression from 'compression';
 import { GoogleGenAI, Type } from '@google/genai';
 
@@ -26,13 +27,11 @@ const getDb = () => {
     if (dbInstance) return dbInstance;
     try {
         const projectId = process.env.GOOGLE_CLOUD_PROJECT || process.env.GCLOUD_PROJECT;
-        if (projectId) {
-            console.log(`🔌 [DB] Initializing Datastore for Project ID: ${projectId}`);
-            dbInstance = new Datastore({ projectId });
-        } else {
-            console.log(`🔌 [DB] Initializing Datastore (Auto-Discovery Mode)`);
-            dbInstance = new Datastore();
-        }
+        const databaseId = process.env.DATASTORE_DATABASE || 'gamerhead';
+        const opts = { databaseId };
+        if (projectId) opts.projectId = projectId;
+        console.log(`🔌 [DB] Initializing Datastore — project: ${projectId || 'auto'}, database: ${databaseId}`);
+        dbInstance = new Datastore(opts);
         return dbInstance;
     } catch (error) {
         console.warn("⚠️ [DB] Connection failed (using mock):", error.message);
@@ -99,6 +98,27 @@ if (basicAuthUsersStr) {
     });
 }
 
+// --- GOOGLE SIGN-IN CONFIG ---
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || '';
+const AUTHORIZED_USERS = (process.env.AUTHORIZED_USERS || '')
+    .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+const AUTHORIZED_DOMAIN = (process.env.AUTHORIZED_DOMAIN || '').trim().toLowerCase();
+
+if (GOOGLE_CLIENT_ID) {
+    console.log(`🔐 [Auth] Google Sign-In enabled. Client ID: ${GOOGLE_CLIENT_ID.slice(0, 12)}...`);
+    if (AUTHORIZED_USERS.length) console.log(`   Authorized users: ${AUTHORIZED_USERS.join(', ')}`);
+    else if (AUTHORIZED_DOMAIN) console.log(`   Authorized domain: ${AUTHORIZED_DOMAIN}`);
+    else console.log(`   Any Google account can access.`);
+}
+
+// Verify Google ID token using google-auth-library (transitive dep via @google-cloud/datastore)
+const verifyGoogleToken = async (idToken) => {
+    const { OAuth2Client } = await import('google-auth-library');
+    const client = new OAuth2Client(GOOGLE_CLIENT_ID);
+    const ticket = await client.verifyIdToken({ idToken, audience: GOOGLE_CLIENT_ID });
+    return ticket.getPayload(); // { email, name, picture, ... }
+};
+
 // --- ROUTES ---
 
 // Health Check (Root) - Useful for load balancers
@@ -109,8 +129,8 @@ app.get('/healthz', (req, res) => {
 // Health Check (API) - Used by Dashboard
 app.get('/api/health', (req, res) => {
     const db = getDb();
-    res.json({ 
-        status: 'ok', 
+    res.json({
+        status: 'ok',
         route: '/api/health',
         database: db ? 'connected' : 'mock',
         env: IS_PRODUCTION ? 'production' : 'development',
@@ -118,8 +138,77 @@ app.get('/api/health', (req, res) => {
     });
 });
 
+// Public config endpoint — returns non-secret settings needed by the frontend
+app.get('/api/config', (req, res) => {
+    res.json({ googleClientId: GOOGLE_CLIENT_ID || null });
+});
+
+// Token verification endpoint — called by frontend after Google Sign-In
+app.post('/api/auth/verify', async (req, res) => {
+    if (!GOOGLE_CLIENT_ID) return res.json({ email: null, name: null, picture: null });
+
+    const { idToken } = req.body;
+    if (!idToken) return res.status(400).json({ error: 'idToken is required' });
+
+    try {
+        const payload = await verifyGoogleToken(idToken);
+        const email = (payload.email || '').toLowerCase();
+
+        // Check authorization
+        if (AUTHORIZED_USERS.length && !AUTHORIZED_USERS.includes(email)) {
+            console.warn(`[Auth] Unauthorized login attempt: ${email}`);
+            return res.status(403).json({ error: `Access denied. ${email} is not on the authorized users list.` });
+        }
+        if (AUTHORIZED_DOMAIN && !email.endsWith(`@${AUTHORIZED_DOMAIN}`)) {
+            console.warn(`[Auth] Unauthorized domain login attempt: ${email}`);
+            return res.status(403).json({ error: `Access denied. Only @${AUTHORIZED_DOMAIN} accounts are allowed.` });
+        }
+
+        console.log(`[Auth] Signed in: ${email}`);
+        res.json({ email: payload.email, name: payload.name, picture: payload.picture });
+    } catch (err) {
+        console.error('[Auth] Token verification failed:', err.message);
+        res.status(401).json({ error: 'Invalid or expired token. Please sign in again.' });
+    }
+});
+
+// Google token verification middleware for all /api/* routes (when enabled)
+const googleAuthMiddleware = async (req, res, next) => {
+    if (!GOOGLE_CLIENT_ID) return next(); // Auth not configured, skip
+
+    // Skip public endpoints
+    const publicPaths = ['/api/health', '/api/config', '/api/auth/verify'];
+    if (publicPaths.includes(req.path)) return next();
+
+    const authHeader = req.headers.authorization || '';
+    const idToken = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+
+    if (!idToken) {
+        return res.status(401).json({ error: 'Authentication required. Please sign in.' });
+    }
+
+    try {
+        const payload = await verifyGoogleToken(idToken);
+        const email = (payload.email || '').toLowerCase();
+
+        if (AUTHORIZED_USERS.length && !AUTHORIZED_USERS.includes(email)) {
+            return res.status(403).json({ error: 'Access denied.' });
+        }
+        if (AUTHORIZED_DOMAIN && !email.endsWith(`@${AUTHORIZED_DOMAIN}`)) {
+            return res.status(403).json({ error: 'Access denied.' });
+        }
+
+        req.userEmail = payload.email;
+        next();
+    } catch (err) {
+        console.warn('[Auth] Invalid token on API call:', err.message);
+        res.status(401).json({ error: 'Token expired or invalid. Please sign in again.' });
+    }
+};
+
 // API Router
 const apiRouter = express.Router();
+apiRouter.use(googleAuthMiddleware);
 
 apiRouter.post('/log', async (req, res) => {
     const entry = {
@@ -308,6 +397,88 @@ const getAccessToken = async () => {
     }
 };
 
+// GCS Storage client (lazy init)
+const GCS_BUCKET_NAME = process.env.GCS_BUCKET_NAME || '';
+let storageInstance = null;
+
+const getStorage = () => {
+    if (!storageInstance) {
+        storageInstance = new Storage();
+    }
+    return storageInstance;
+};
+
+/**
+ * Copy a Veo-generated video (gs:// URI) into the customer bucket.
+ * Downloads via ADC bearer token (same approach as download-video),
+ * then streams the upload to GCS using the Storage client.
+ * Returns the new gs://bucket/object URI.
+ */
+const copyVideoToBucket = async (sourceUri) => {
+    const token = await getAccessToken();
+
+    // Download from Veo temp storage
+    const resp = await fetch(sourceUri, {
+        headers: { 'Authorization': `Bearer ${token}` }
+    });
+    if (!resp.ok) {
+        const errText = await resp.text().catch(() => resp.statusText);
+        throw new Error(`Failed to download video from Veo (${resp.status}): ${errText}`);
+    }
+
+    // Build destination object name: videos/<timestamp>-<random>.mp4
+    const objectName = `videos/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp4`;
+
+    const storage = getStorage();
+    const bucket = storage.bucket(GCS_BUCKET_NAME);
+    const file = bucket.file(objectName);
+
+    // Stream upload
+    await new Promise((resolve, reject) => {
+        const writeStream = file.createWriteStream({
+            contentType: resp.headers.get('content-type') || 'video/mp4',
+            resumable: false,
+        });
+        writeStream.on('finish', resolve);
+        writeStream.on('error', reject);
+        resp.body.pipeTo(new WritableStream({
+            write(chunk) { writeStream.write(chunk); },
+            close() { writeStream.end(); },
+            abort(err) { writeStream.destroy(err); }
+        })).catch(reject);
+    });
+
+    const destUri = `gs://${GCS_BUCKET_NAME}/${objectName}`;
+    console.log(`[GCS] Video copied to ${destUri}`);
+    return destUri;
+};
+
+// GET /api/admin/signed-url?uri=gs://bucket/path/file
+// Returns a short-lived signed URL for a GCS object (admin only)
+apiRouter.get('/admin/signed-url', async (req, res) => {
+    const { uri } = req.query;
+    if (!uri || !uri.startsWith('gs://')) {
+        return res.status(400).json({ error: 'Invalid or missing gs:// uri' });
+    }
+    try {
+        const withoutScheme = uri.slice(5); // remove "gs://"
+        const slashIdx = withoutScheme.indexOf('/');
+        if (slashIdx === -1) return res.status(400).json({ error: 'Invalid GCS URI' });
+        const bucketName = withoutScheme.slice(0, slashIdx);
+        const objectName = withoutScheme.slice(slashIdx + 1);
+
+        const storage = getStorage();
+        const [signedUrl] = await storage.bucket(bucketName).file(objectName).getSignedUrl({
+            action: 'read',
+            expires: Date.now() + 15 * 60 * 1000, // 15 minutes
+        });
+        res.redirect(signedUrl);
+    } catch (err) {
+        console.error('[Admin] signed-url error:', err);
+        res.status(500).json({ error: 'Failed to generate signed URL: ' + err.message });
+    }
+});
+
 // Safety settings for image generation
 const SAFETY_SETTINGS_BLOCK_NONE = [
     { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
@@ -323,13 +494,13 @@ apiRouter.post('/gemini/generate-script', async (req, res) => {
     if (!prompt) return res.status(400).json({ error: 'prompt is required' });
 
     try {
-        const ai = getVertexAIClient();
+        const ai = getVertexAIGlobalClient();
         const parts = [{ text: prompt }];
         if (inlineData) parts.push({ inlineData });
 
         const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash-preview-04-17',
-            contents: { parts },
+            model: 'gemini-3-flash-preview',
+            contents: [{ role: 'user', parts }],
             config: {
                 thinkingConfig: { thinkingBudget: 1024 },
                 tools: [{ googleSearch: {} }],
@@ -359,9 +530,9 @@ apiRouter.post('/gemini/analyze-script', async (req, res) => {
     if (!prompt) return res.status(400).json({ error: 'prompt is required' });
 
     try {
-        const ai = getVertexAIClient();
+        const ai = getVertexAIGlobalClient();
         const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash-preview-04-17',
+            model: 'gemini-3-flash-preview',
             contents: prompt,
             config: {
                 responseMimeType: 'application/json',
@@ -416,7 +587,7 @@ apiRouter.post('/gemini/generate-avatar', async (req, res) => {
         console.log(`[Gemini] Avatar model: ${resolvedModel} (global endpoint)`);
         const response = await ai.models.generateContent({
             model: resolvedModel,
-            contents: { parts },
+            contents: [{ role: 'user', parts }],
             config: {
                 temperature: 0.5,
                 responseModalities: ['IMAGE', 'TEXT'],
@@ -450,8 +621,8 @@ apiRouter.post('/gemini/generate-video', async (req, res) => {
     if (!prompt || !imageBase64) return res.status(400).json({ error: 'prompt and imageBase64 are required' });
 
     try {
-        const ai = getVertexAIGlobalClient();  // Veo requires global endpoint
-        const veoModel = model || 'veo-3.1-generate-preview';
+        const ai = getVertexAIClient();  // Veo 3.1 uses us-central1 endpoint
+        const veoModel = model || 'veo-3.1-generate-001';
         const veoRatio = aspectRatio === '9:16' ? '9:16' : '16:9';
 
         const config = {
@@ -479,13 +650,42 @@ apiRouter.post('/gemini/generate-video', async (req, res) => {
 
 // GET /api/gemini/video-operation?name=xxx
 // Returns: { done: bool, videoUri?: string, error?: string }
+// NOTE: We use direct REST API here because the SDK's getVideosOperation()
+// requires a SDK-internal Operation object, not a plain { name } object.
 apiRouter.get('/gemini/video-operation', async (req, res) => {
     const { name } = req.query;
     if (!name) return res.status(400).json({ error: 'name is required' });
 
     try {
-        const ai = getVertexAIGlobalClient();  // Veo operations also use global endpoint
-        const operation = await ai.operations.getVideosOperation({ operation: { name } });
+        const token = await getAccessToken();
+
+        // Veo operations must be polled via fetchPredictOperation (not standard GET /operations/{id})
+        // name = "projects/.../locations/global/publishers/google/models/veo-xxx/operations/yyy"
+        // Extract model path: "projects/.../locations/global/publishers/google/models/veo-xxx"
+        const modelPathMatch = name.match(/^(.*\/models\/[^/]+)\/operations\//);
+        if (!modelPathMatch) {
+            throw new Error(`Cannot parse operation name: ${name}`);
+        }
+        const modelPath = modelPathMatch[1];
+        const fetchOpUrl = `https://us-central1-aiplatform.googleapis.com/v1/${modelPath}:fetchPredictOperation`;
+        console.log(`[Gemini] fetchPredictOperation: ${fetchOpUrl}`);
+
+        const opResp = await fetch(fetchOpUrl, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ operationName: name })
+        });
+
+        if (!opResp.ok) {
+            const errText = await opResp.text().catch(() => opResp.statusText);
+            throw new Error(`fetchPredictOperation failed (${opResp.status}): ${errText}`);
+        }
+
+        const operation = await opResp.json();
+        console.log(`[Gemini] Operation status: done=${operation.done}`);
 
         if (!operation.done) {
             return res.json({ done: false });
@@ -494,11 +694,73 @@ apiRouter.get('/gemini/video-operation', async (req, res) => {
             return res.json({ done: true, error: operation.error.message || 'Video generation failed' });
         }
 
-        const videoUri = operation.response?.generatedVideos?.[0]?.video?.uri;
-        if (!videoUri) {
-            return res.json({ done: true, error: 'No video URI returned from API' });
+        // Log full response to understand URI structure
+        console.log('[Gemini] Operation response:', JSON.stringify(operation.response));
+
+        // Check for RAI (Responsible AI) content filter — video blocked by safety policy
+        const raiFilteredCount = operation.response?.raiMediaFilteredCount;
+        if (raiFilteredCount && raiFilteredCount > 0) {
+            const reasons = operation.response?.raiMediaFilteredReasons || [];
+            const reason = reasons[0] || 'Content policy violation';
+            console.warn(`[Gemini] Video blocked by RAI filter: ${reason}`);
+            return res.json({ done: true, error: `Video blocked by Vertex AI safety filter. Try rephrasing the prompt. (${reason})` });
         }
-        res.json({ done: true, videoUri });
+
+        // Try multiple possible response paths for video URI
+        // GenerateVideoResponse uses: response.videos[0].gcsUri
+        const videoUri = operation.response?.videos?.[0]?.gcsUri
+                      || operation.response?.videos?.[0]?.uri
+                      || operation.response?.generatedVideos?.[0]?.video?.uri
+                      || operation.response?.generatedVideos?.[0]?.video?.gcsUri
+                      || operation.response?.generatedSamples?.[0]?.video?.uri
+                      || operation.response?.generatedSamples?.[0]?.video?.gcsUri;
+
+        // Veo may return video bytes directly (bytesBase64Encoded) instead of a GCS URI
+        const videoBase64 = operation.response?.videos?.[0]?.bytesBase64Encoded
+                         || operation.response?.generatedVideos?.[0]?.video?.bytesBase64Encoded
+                         || operation.response?.generatedSamples?.[0]?.video?.bytesBase64Encoded;
+
+        if (!videoUri && !videoBase64) {
+            return res.json({ done: true, error: 'No video URI returned. Response: ' + JSON.stringify(operation.response) });
+        }
+
+        let finalVideoUri = videoUri || null;
+
+        if (videoBase64) {
+            // Video returned as raw bytes — upload to customer bucket if configured,
+            // otherwise stream directly to the frontend as a base64 data URL.
+            if (GCS_BUCKET_NAME) {
+                try {
+                    console.log(`[GCS] Uploading inline video bytes to customer bucket: ${GCS_BUCKET_NAME}`);
+                    const objectName = `videos/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp4`;
+                    const storage = getStorage();
+                    const file = storage.bucket(GCS_BUCKET_NAME).file(objectName);
+                    await file.save(Buffer.from(videoBase64, 'base64'), { contentType: 'video/mp4', resumable: false });
+                    finalVideoUri = `gs://${GCS_BUCKET_NAME}/${objectName}`;
+                    console.log(`[GCS] Inline video uploaded to ${finalVideoUri}`);
+                } catch (uploadErr) {
+                    console.error('[GCS] Failed to upload inline video bytes:', uploadErr.message);
+                    // Fall back: send base64 directly so frontend can still play it
+                    return res.json({ done: true, videoBase64: `data:video/mp4;base64,${videoBase64}` });
+                }
+            } else {
+                // No bucket configured — send base64 directly to frontend
+                console.log('[Gemini] No bucket configured, returning inline video as base64');
+                return res.json({ done: true, videoBase64: `data:video/mp4;base64,${videoBase64}` });
+            }
+        }
+
+        // If a customer bucket is configured and we have a GCS URI, copy the video there.
+        if (GCS_BUCKET_NAME && finalVideoUri && !finalVideoUri.startsWith(`gs://${GCS_BUCKET_NAME}/`)) {
+            try {
+                console.log(`[GCS] Copying video to customer bucket: ${GCS_BUCKET_NAME}`);
+                finalVideoUri = await copyVideoToBucket(finalVideoUri);
+            } catch (copyErr) {
+                console.error('[GCS] Failed to copy video to customer bucket, falling back to Veo URI:', copyErr.message);
+            }
+        }
+
+        res.json({ done: true, videoUri: finalVideoUri });
     } catch (err) {
         console.error('[Gemini] video-operation error:', err);
         res.status(500).json({ error: err.message });
@@ -506,36 +768,55 @@ apiRouter.get('/gemini/video-operation', async (req, res) => {
 });
 
 // GET /api/gemini/download-video?uri=xxx
-// Fetches video using ADC token and streams to client
+// Streams video to client.
+// - gs://bucket/object  → read via Storage SDK (customer bucket or Veo bucket)
+// - https://...         → fetch with ADC Bearer token (legacy Veo HTTP URIs)
 apiRouter.get('/gemini/download-video', async (req, res) => {
     const { uri } = req.query;
     if (!uri) return res.status(400).json({ error: 'uri is required' });
 
     try {
-        const token = await getAccessToken();
-        const videoResp = await fetch(uri, {
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
-
-        if (!videoResp.ok) {
-            const errText = await videoResp.text().catch(() => videoResp.statusText);
-            console.error(`[Gemini] Video download failed (${videoResp.status}):`, errText);
-            return res.status(videoResp.status).json({ error: `Download failed: ${errText}` });
-        }
-
-        const contentType = videoResp.headers.get('content-type') || 'video/mp4';
-        res.setHeader('Content-Type', contentType);
+        res.setHeader('Content-Type', 'video/mp4');
         res.setHeader('Cache-Control', 'no-store');
 
-        // Stream the response body to the client
-        const reader = videoResp.body.getReader();
-        const pump = async () => {
-            const { done, value } = await reader.read();
-            if (done) { res.end(); return; }
-            res.write(Buffer.from(value));
+        if (uri.startsWith('gs://')) {
+            // Parse gs://bucket/object
+            const withoutScheme = uri.slice(5);
+            const slashIdx = withoutScheme.indexOf('/');
+            if (slashIdx === -1) return res.status(400).json({ error: 'Invalid GCS URI' });
+            const bucketName = withoutScheme.slice(0, slashIdx);
+            const objectName = withoutScheme.slice(slashIdx + 1);
+
+            console.log(`[GCS] Streaming gs://${bucketName}/${objectName}`);
+            const storage = getStorage();
+            const readStream = storage.bucket(bucketName).file(objectName).createReadStream();
+            readStream.on('error', (err) => {
+                console.error('[GCS] Read stream error:', err);
+                if (!res.headersSent) res.status(500).json({ error: err.message });
+            });
+            readStream.pipe(res);
+        } else {
+            // Legacy: HTTP URI from Veo temp storage — fetch with Bearer token
+            const token = await getAccessToken();
+            const videoResp = await fetch(uri, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+
+            if (!videoResp.ok) {
+                const errText = await videoResp.text().catch(() => videoResp.statusText);
+                console.error(`[Gemini] Video download failed (${videoResp.status}):`, errText);
+                return res.status(videoResp.status).json({ error: `Download failed: ${errText}` });
+            }
+
+            const reader = videoResp.body.getReader();
+            const pump = async () => {
+                const { done, value } = await reader.read();
+                if (done) { res.end(); return; }
+                res.write(Buffer.from(value));
+                await pump();
+            };
             await pump();
-        };
-        await pump();
+        }
     } catch (err) {
         console.error('[Gemini] download-video error:', err);
         if (!res.headersSent) res.status(500).json({ error: err.message });

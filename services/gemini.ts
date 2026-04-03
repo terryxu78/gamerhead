@@ -8,6 +8,7 @@ import {
 } from "./prompts";
 import { compressVideo } from "../utils/videoUtils";
 import { logEvent } from "./logging";
+import { apiFetch as authFetch } from "./auth";
 
 // ---------------------------------------------------------------------------
 // NOTE: All Gemini / Veo API calls are proxied through the Express backend
@@ -32,13 +33,14 @@ const fileToBase64 = (file: File | Blob): Promise<string> => {
 };
 
 /**
- * Thin wrapper around fetch that throws on non-OK responses
+ * Thin wrapper around authFetch that throws on non-OK responses and returns JSON.
+ * Handles Bearer token attachment and automatic token refresh on 401.
  */
 const apiFetch = async (path: string, options?: RequestInit): Promise<any> => {
-    const res = await fetch(path, options);
+    const res = await authFetch(path, options || {});
     if (!res.ok) {
         let errMsg = `HTTP ${res.status}`;
-        try { 
+        try {
             const body = await res.json();
             errMsg = body.error || errMsg;
         } catch { /* ignore */ }
@@ -92,7 +94,7 @@ export const generateStreamerScript = async (
     });
 
     if (onStatusUpdate) onStatusUpdate("Finalizing...", 100);
-    logEvent('script', 'gemini-2.5-flash', 'success');
+    logEvent('script', 'gemini-3-flash-preview', 'success');
     return {
       fullText: result.fullText,
       groundingUrls: result.groundingUrls || [],
@@ -100,7 +102,7 @@ export const generateStreamerScript = async (
       inlineData: result.inlineData || inlineData
     };
   } catch (error: any) {
-    logEvent('script', 'gemini-2.5-flash', 'failed', { error: error.message });
+    logEvent('script', 'gemini-3-flash-preview', 'failed', { error: error.message });
     throw error;
   }
 };
@@ -153,10 +155,10 @@ export const analyzeScriptForVeo = async (script: string): Promise<VeoSegment[]>
       body: JSON.stringify({ prompt })
     });
 
-    logEvent('script', 'gemini-2.5-flash', 'success', { segments: segments.length });
+    logEvent('script', 'gemini-3-flash-preview', 'success', { segments: segments.length });
     return segments;
   } catch (error: any) {
-    logEvent('script', 'gemini-2.5-flash', 'failed', { error: error.message });
+    logEvent('script', 'gemini-3-flash-preview', 'failed', { error: error.message });
     throw new Error(`Failed to analyze script for video generation: ${error.message}`);
   }
 };
@@ -170,7 +172,7 @@ export const generateVeoClip = async (
   imageBase64: string,
   aspectRatio: '16:9' | '9:16',
   durationSeconds: 4 | 6 | 8,
-  model: 'veo-3.1-generate-preview' | 'veo-3.1-fast-generate-preview',
+  model: 'veo-3.1-generate-001' | 'veo-3.1-fast-generate-001',
   signal?: AbortSignal
 ): Promise<string> => {
   const refinedPrompt = constructVeoGenerationPrompt(prompt, dialogue, durationSeconds);
@@ -214,9 +216,14 @@ export const generateVeoClip = async (
     throw err;
   }
 
-  // Step 2: Poll for operation completion
+  // Step 2: Poll for operation completion (max 180 seconds)
+  const MAX_POLL_MS = 180_000;
+  const pollStartTime = Date.now();
   while (true) {
     if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+    if (Date.now() - pollStartTime > MAX_POLL_MS) {
+      throw new Error(`Video generation timed out after 180 seconds. The operation may still be running.`);
+    }
     await new Promise(resolve => setTimeout(resolve, 5000));
     if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
 
@@ -239,21 +246,34 @@ export const generateVeoClip = async (
       throw new Error(`Video generation failed: ${pollResult.error}`);
     }
 
-    const videoUri = pollResult.videoUri;
+    // Step 3a: Server returned inline base64 video (no GCS URI)
+    if (pollResult.videoBase64) {
+      logEvent('video', model, 'success', { duration: durationSeconds });
+      return pollResult.videoBase64; // data:video/mp4;base64,... — usable directly in <video src>
+    }
+
+    const videoUri: string = pollResult.videoUri;
     if (!videoUri) throw new Error("Video generation completed but no URI returned.");
 
     if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
 
-    // Step 3: Download video through server proxy (uses ADC Bearer token)
+    // Step 3b: Download video through server proxy (uses ADC Bearer token)
     try {
       const downloadUrl = `/api/gemini/download-video?uri=${encodeURIComponent(videoUri)}`;
-      const downloadResp = await fetch(downloadUrl, { signal });
+      const token = sessionStorage.getItem('gh_id_token');
+      const downloadResp = await fetch(downloadUrl, {
+        signal,
+        headers: token ? { 'Authorization': `Bearer ${token}` } : {}
+      });
       if (!downloadResp.ok) {
         const errText = await downloadResp.text().catch(() => downloadResp.statusText);
         throw new Error(`Failed to download video (${downloadResp.status}): ${errText}`);
       }
       const blob = await downloadResp.blob();
-      logEvent('video', model, 'success', { duration: durationSeconds });
+      logEvent('video', model, 'success', {
+        duration: durationSeconds,
+        gcsUri: videoUri.startsWith('gs://') ? videoUri : undefined,
+      });
       return URL.createObjectURL(blob);
     } catch (err: any) {
       if (err.name === 'AbortError') throw err;
