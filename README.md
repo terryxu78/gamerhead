@@ -82,7 +82,7 @@ Each click generates a fresh signed URL, so re-clicking a link always works rega
 
 Model names in the dashboard strip only the hyphen separator, preserving the vendor prefix:
 - `veo-3.1-fast-generate-001` → `veo 3.1-fast-generate-001`
-- `gemini-2.0-flash` → `gemini 2.0-flash`
+- `gemini-3.1-flash` → `gemini 3.1-flash`
 
 ---
 
