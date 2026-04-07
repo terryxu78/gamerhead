@@ -442,12 +442,22 @@ const AdminDashboard: React.FC = () => {
                                         {log.meta?.gcsUri ? (() => {
                                             const uri: string = log.meta.gcsUri;
                                             const shortLabel = uri.split('/').pop() || uri;
-                                            const signedUrlEndpoint = `/api/admin/signed-url?uri=${encodeURIComponent(uri)}`;
+                                            const handleFileClick = async (e: React.MouseEvent) => {
+                                                e.preventDefault();
+                                                try {
+                                                    const res = await apiFetch(`/api/admin/signed-url?uri=${encodeURIComponent(uri)}`);
+                                                    if (!res.ok) throw new Error('Failed to get download link');
+                                                    const data = await res.json();
+                                                    window.open(data.url, '_blank', 'noopener,noreferrer');
+                                                } catch (err) {
+                                                    console.error('Download error:', err);
+                                                    alert('Failed to get download link. Please try again.');
+                                                }
+                                            };
                                             return (
                                                 <a
-                                                    href={signedUrlEndpoint}
-                                                    target="_blank"
-                                                    rel="noopener noreferrer"
+                                                    href="#"
+                                                    onClick={handleFileClick}
                                                     title={uri}
                                                     className="text-google-blue hover:text-google-blueHover underline underline-offset-2 font-mono"
                                                 >

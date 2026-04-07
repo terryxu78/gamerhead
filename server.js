@@ -472,7 +472,7 @@ apiRouter.get('/admin/signed-url', async (req, res) => {
             action: 'read',
             expires: Date.now() + 15 * 60 * 1000, // 15 minutes
         });
-        res.redirect(signedUrl);
+        res.json({ url: signedUrl });
     } catch (err) {
         console.error('[Admin] signed-url error:', err);
         res.status(500).json({ error: 'Failed to generate signed URL: ' + err.message });
