@@ -347,7 +347,7 @@ apiRouter.get('/admin/stats', async (req, res) => {
 const GCP_PROJECT_ID = process.env.GCP_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT;
 const GCP_LOCATION = process.env.GCP_LOCATION || 'us-central1';
 
-// Regional client (us-central1) — for text/multimodal Gemini models
+// Regional client — for text/multimodal Gemini models
 const getVertexAIClient = () => {
     if (!GCP_PROJECT_ID) {
         throw new Error('GCP_PROJECT_ID / GOOGLE_CLOUD_PROJECT environment variable is not set.');
@@ -356,6 +356,19 @@ const getVertexAIClient = () => {
         vertexai: true,
         project: GCP_PROJECT_ID,
         location: GCP_LOCATION   // e.g. us-central1
+    });
+};
+
+// Veo client — always uses us-central1 regardless of Cloud Run deployment region
+// Veo models are only available in us-central1
+const getVeoClient = () => {
+    if (!GCP_PROJECT_ID) {
+        throw new Error('GCP_PROJECT_ID / GOOGLE_CLOUD_PROJECT environment variable is not set.');
+    }
+    return new GoogleGenAI({
+        vertexai: true,
+        project: GCP_PROJECT_ID,
+        location: 'us-central1'
     });
 };
 
@@ -621,7 +634,7 @@ apiRouter.post('/gemini/generate-video', async (req, res) => {
     if (!prompt || !imageBase64) return res.status(400).json({ error: 'prompt and imageBase64 are required' });
 
     try {
-        const ai = getVertexAIClient();  // Veo 3.1 uses us-central1 endpoint
+        const ai = getVeoClient();  // Veo only available in us-central1
         const veoModel = model || 'veo-3.1-generate-001';
         const veoRatio = aspectRatio === '9:16' ? '9:16' : '16:9';
 
