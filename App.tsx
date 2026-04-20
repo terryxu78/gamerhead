@@ -5,7 +5,7 @@ import AvatarGenerator from './components/AvatarGenerator';
 import Studio from './components/Studio';
 import AdminDashboard from './components/AdminDashboard';
 import { GameInfo, ScriptResult, AvatarConfig, TargetAspectRatio, VeoSegment } from './types';
-import { generateStreamerScript, analyzeScriptForVeo } from './services/gemini';
+import { generateStreamerScript } from './services/gemini';
 import { getUserId } from './services/logging';
 import NeonButton from './components/NeonButton';
 import {
@@ -195,14 +195,10 @@ const GameHeads: React.FC<{ onReset: () => void; currentUser: GoogleUser | null;
         });
       }
 
-      setStatusMessage("Creating Shot List...");
-      setUploadProgress(95);
-      const shotList = await analyzeScriptForVeo(scriptResult.fullText);
-      
       console.log("[App] Script & Shot List generation successful.");
       
       setResult(scriptResult);
-      setSegments(shotList);
+      setSegments(scriptResult.segments);
       setScriptHistory([scriptResult.fullText]);
       setHistoryIndex(0);
       

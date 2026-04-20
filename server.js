@@ -518,10 +518,38 @@ apiRouter.post('/gemini/generate-script', async (req, res) => {
                 thinkingConfig: { thinkingBudget: 1024 },
                 tools: [{ googleSearch: {} }],
                 systemInstruction: 'You are an expert content creator scriptwriter. Use the provided context to generate the script.',
+                responseMimeType: 'application/json',
+                responseSchema: {
+                    type: Type.ARRAY,
+                    items: {
+                        type: Type.OBJECT,
+                        properties: {
+                            id: { type: Type.INTEGER },
+                            startTime: { type: Type.STRING },
+                            endTime: { type: Type.STRING },
+                            duration: { type: Type.INTEGER },
+                            prompt: { type: Type.STRING },
+                            dialogue: { type: Type.STRING }
+                        },
+                        required: ['id', 'startTime', 'endTime', 'duration', 'prompt', 'dialogue']
+                    }
+                }
             }
         });
 
-        const fullText = response.text || 'No script generated.';
+        const rawSegments = JSON.parse(response.text || '[]');
+        const validatedSegments = rawSegments.map(seg => {
+            let d = seg.duration;
+            if (d <= 4) d = 4;
+            else if (d <= 6) d = 6;
+            else d = 8;
+            return { ...seg, duration: d };
+        });
+
+        const fullText = validatedSegments.map(s => 
+            `[${s.startTime}]\n[Duration: ${s.duration}s]\n[Streamer Action: ${s.prompt}]\n[Streamer Dialogue: ${s.dialogue || '(No Dialogue)'}]\n`
+        ).join('\n');
+
         const groundingUrls = [];
         if (response.candidates?.[0]?.groundingMetadata?.groundingChunks) {
             response.candidates[0].groundingMetadata.groundingChunks.forEach(chunk => {
@@ -529,7 +557,7 @@ apiRouter.post('/gemini/generate-script', async (req, res) => {
             });
         }
 
-        res.json({ fullText, groundingUrls, inlineData: inlineData || null });
+        res.json({ fullText, segments: validatedSegments, groundingUrls, inlineData: inlineData || null });
     } catch (err) {
         console.error('[Gemini] generate-script error:', err);
         res.status(500).json({ error: err.message });
