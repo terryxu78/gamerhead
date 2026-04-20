@@ -97,6 +97,7 @@ export const generateStreamerScript = async (
     logEvent('script', 'gemini-3-flash-preview', 'success');
     return {
       fullText: result.fullText,
+      segments: result.segments,
       groundingUrls: result.groundingUrls || [],
       videoMimeType: finalMimeType,
       inlineData: result.inlineData || inlineData
@@ -177,17 +178,6 @@ export const generateVeoClip = async (
 ): Promise<string> => {
   const refinedPrompt = constructVeoGenerationPrompt(prompt, dialogue, durationSeconds);
 
-  const hasDialogue = dialogue && dialogue.trim().length > 0;
-  const systemInstruction = `STRICT TECHNICAL CONSTRAINTS (MUST FOLLOW):
-1. CAMERA: **TRIPOD SHOT**. LOCKED OFF. ABSOLUTELY NO CAMERA MOVEMENT. NO ZOOM. NO PAN.
-2. CONTINUITY: Single continuous take. No cuts.
-3. STREAMER GAZE: Eyes stay focused on the monitor/mobile phone (below camera).
-4. OVERLAYS: No text, no subtitles, no UI.
-5. AUDIO: ${hasDialogue ? 'Speech only.' : 'Silence.'} NO MUSIC. NO SFX.
-6. DURATION: Exactly ${durationSeconds} seconds.
-7. NEGATIVE PROMPT: No gameplay footage. No video game UI. No HUD. No CGI characters next to streamer. No music. No SFX. No camera movements. No scene cuts. No graphics or animations.
-8. [IF APPLICABLE] GAMING PHONE STABILITY: STREAMER DOES NOT ROTATE THE PHONE THAT THEY ARE HOLDING. DEVICE ORIENTATION IS FIXED AT ALL TIMES`;
-
   if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
 
   // Step 1: Start video generation — returns operation name
@@ -205,8 +195,7 @@ export const generateVeoClip = async (
         imageBase64: rawImageBase64,
         aspectRatio,
         durationSeconds,
-        model,
-        systemInstruction
+        model
       })
     });
     operationName = startResult.operationName;

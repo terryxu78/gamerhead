@@ -27,6 +27,7 @@ export interface ScriptSection {
 
 export interface ScriptResult {
   fullText: string;
+  segments: VeoSegment[];
   groundingUrls: string[];
   videoFileUri?: string;
   videoMimeType?: string;

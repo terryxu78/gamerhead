@@ -52,7 +52,7 @@ const Studio: React.FC<StudioProps> = ({
   const [exportProgress, setExportProgress] = useState<string | null>(null);
   
   // Audio Mix State
-  const [audioVolumes, setAudioVolumes] = useState({ streamer: 1.2, gameplay: 0.4 });
+  const [audioVolumes, setAudioVolumes] = useState({ streamer: 1.2, gameplay: 0.3 });
 
   // Veo Model Selection
   const [veoModel, setVeoModel] = useState<'veo-3.1-generate-001' | 'veo-3.1-fast-generate-001'>('veo-3.1-generate-001');
