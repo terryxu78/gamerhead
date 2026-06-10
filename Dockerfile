@@ -1,6 +1,10 @@
 # 使用Node.js 20官方镜像
 FROM node:20-slim
 
+# 安装 FFmpeg 用于服务端视频拼接
+RUN apt-get update && apt-get install -y ffmpeg --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
+
 # 设置工作目录
 WORKDIR /app
 

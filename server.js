@@ -2,11 +2,20 @@ import 'dotenv/config';
 import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import fs from 'fs';
+import fs, { createReadStream } from 'fs';
+import { mkdtemp, writeFile, rm } from 'fs/promises';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+import os from 'os';
+import { createRequire } from 'module';
 import { Datastore } from '@google-cloud/datastore';
 import { Storage } from '@google-cloud/storage';
 import compression from 'compression';
 import { GoogleGenAI, Type } from '@google/genai';
+
+const require = createRequire(import.meta.url);
+const multer = require('multer');
+const execFileAsync = promisify(execFile);
 
 // --- CONFIGURATION ---
 const __filename = fileURLToPath(import.meta.url);
@@ -221,17 +230,23 @@ apiRouter.post('/log', async (req, res) => {
     const database = getDb();
     try {
         if (database) {
-            // Datastore API: Create a key and entity
-            const key = database.key('GenerationLog');
-            const entity = {
-                key: key,
-                data: entry
-            };
-            await database.save(entity);
+            try {
+                // Datastore API: Create a key and entity
+                const key = database.key('GenerationLog');
+                const entity = {
+                    key: key,
+                    data: entry
+                };
+                await database.save(entity);
+            } catch (dbErr) {
+                console.warn("⚠️ [API] Datastore save failed, falling back to mock storage:", dbErr.message);
+                mockDbStore.logs.unshift(entry);
+                if (mockDbStore.logs.length > 2000) mockDbStore.logs.pop();
+            }
         } else {
             mockDbStore.logs.unshift(entry);
             // Limit mock storage to prevent overflow during long dev sessions
-            if (mockDbStore.logs.length > 2000) mockDbStore.logs.pop(); 
+            if (mockDbStore.logs.length > 2000) mockDbStore.logs.pop();
         }
         res.status(200).json({ saved: true });
     } catch (e) {
@@ -501,9 +516,9 @@ const SAFETY_SETTINGS_BLOCK_NONE = [
 ];
 
 // POST /api/gemini/generate-script
-// Body: { prompt: string, inlineData?: { data: string, mimeType: string }, videoMimeType?: string }
+// Body: { prompt: string, inlineData?: { data: string, mimeType: string }, videoMimeType?: string, searchGrounding?: boolean, gameUrl?: string }
 apiRouter.post('/gemini/generate-script', async (req, res) => {
-    const { prompt, inlineData, videoMimeType } = req.body;
+    const { prompt, inlineData, videoMimeType, searchGrounding, gameUrl } = req.body;
     if (!prompt) return res.status(400).json({ error: 'prompt is required' });
 
     try {
@@ -512,12 +527,10 @@ apiRouter.post('/gemini/generate-script', async (req, res) => {
         if (inlineData) parts.push({ inlineData });
 
         const response = await ai.models.generateContent({
-            model: 'gemini-3-flash-preview',
+            model: 'gemini-3.5-flash',
             contents: [{ role: 'user', parts }],
             config: {
-                thinkingConfig: { thinkingBudget: 1024 },
-                tools: [{ googleSearch: {} }],
-                systemInstruction: 'You are an expert content creator scriptwriter. Use the provided context to generate the script.',
+                systemInstruction: 'You are an expert content creator scriptwriter. You must strictly adhere to the provided pacing and word count rules (ranges per segment duration) to generate the script.',
                 responseMimeType: 'application/json',
                 responseSchema: {
                     type: Type.ARRAY,
@@ -533,7 +546,8 @@ apiRouter.post('/gemini/generate-script', async (req, res) => {
                         },
                         required: ['id', 'startTime', 'endTime', 'duration', 'prompt', 'dialogue']
                     }
-                }
+                },
+                tools: searchGrounding ? [{ googleSearch: {} }] : undefined
             }
         });
 
@@ -546,7 +560,7 @@ apiRouter.post('/gemini/generate-script', async (req, res) => {
             return { ...seg, duration: d };
         });
 
-        const fullText = validatedSegments.map(s => 
+        const fullText = validatedSegments.map(s =>
             `[${s.startTime}]\n[Duration: ${s.duration}s]\n[Streamer Action: ${s.prompt}]\n[Streamer Dialogue: ${s.dialogue || '(No Dialogue)'}]\n`
         ).join('\n');
 
@@ -573,7 +587,7 @@ apiRouter.post('/gemini/analyze-script', async (req, res) => {
     try {
         const ai = getVertexAIGlobalClient();
         const response = await ai.models.generateContent({
-            model: 'gemini-3-flash-preview',
+            model: 'gemini-3.5-flash',
             contents: prompt,
             config: {
                 responseMimeType: 'application/json',
@@ -861,6 +875,62 @@ apiRouter.get('/gemini/download-video', async (req, res) => {
     } catch (err) {
         console.error('[Gemini] download-video error:', err);
         if (!res.headersSent) res.status(500).json({ error: err.message });
+    }
+});
+
+// POST /api/gemini/stitch-clips
+// Body: multipart/form-data, field "clips" (multiple video files)
+// Returns: video/mp4 stream, or JSON { url } if GCS bucket is configured
+const upload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 200 * 1024 * 1024 } // 200MB per file
+});
+
+apiRouter.post('/gemini/stitch-clips', upload.array('clips'), async (req, res) => {
+    const files = req.files;
+    if (!files || files.length === 0) {
+        return res.status(400).json({ error: 'No clip files provided' });
+    }
+
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), 'stitch-'));
+    try {
+        // 写入各片段到临时目录
+        const clipPaths = [];
+        for (let i = 0; i < files.length; i++) {
+            const p = path.join(tmpDir, `clip_${i}.mp4`);
+            await writeFile(p, files[i].buffer);
+            clipPaths.push(p);
+        }
+
+        // 生成 FFmpeg concat filelist
+        const fileListContent = clipPaths.map(p => `file '${p}'`).join('\n');
+        const fileListPath = path.join(tmpDir, 'filelist.txt');
+        await writeFile(fileListPath, fileListContent);
+
+        // 运行 FFmpeg 无损拼接
+        const outputPath = path.join(tmpDir, 'output.mp4');
+        await execFileAsync('ffmpeg', [
+            '-f', 'concat',
+            '-safe', '0',
+            '-i', fileListPath,
+            '-c', 'copy',
+            '-y',
+            outputPath
+        ]);
+
+        console.log(`[FFmpeg] Stitched ${files.length} clips → ${outputPath}`);
+
+        // 直接流式返回，避免 GCS 签名 URL 的 CORS 问题
+        res.setHeader('Content-Type', 'video/mp4');
+        res.setHeader('Content-Disposition', 'attachment; filename="stitched.mp4"');
+        createReadStream(outputPath).pipe(res);
+    } catch (err) {
+        console.error('[FFmpeg] stitch-clips error:', err);
+        if (!res.headersSent) {
+            res.status(500).json({ error: 'Stitch failed: ' + err.message });
+        }
+    } finally {
+        await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
     }
 });
 

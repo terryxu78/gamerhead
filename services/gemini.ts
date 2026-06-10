@@ -90,11 +90,17 @@ export const generateStreamerScript = async (
     const result = await apiFetch('/api/gemini/generate-script', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt, inlineData: inlineData || null, videoMimeType: finalMimeType })
+      body: JSON.stringify({
+        prompt,
+        inlineData: inlineData || null,
+        videoMimeType: finalMimeType,
+        searchGrounding: info.searchGrounding,
+        gameUrl: info.url
+      })
     });
 
     if (onStatusUpdate) onStatusUpdate("Finalizing...", 100);
-    logEvent('script', 'gemini-3-flash-preview', 'success');
+    logEvent('script', 'gemini-3.5-flash', 'success');
     return {
       fullText: result.fullText,
       segments: result.segments,
@@ -103,7 +109,7 @@ export const generateStreamerScript = async (
       inlineData: result.inlineData || inlineData
     };
   } catch (error: any) {
-    logEvent('script', 'gemini-3-flash-preview', 'failed', { error: error.message });
+    logEvent('script', 'gemini-3.5-flash', 'failed', { error: error.message });
     throw error;
   }
 };
@@ -156,10 +162,10 @@ export const analyzeScriptForVeo = async (script: string): Promise<VeoSegment[]>
       body: JSON.stringify({ prompt })
     });
 
-    logEvent('script', 'gemini-3-flash-preview', 'success', { segments: segments.length });
+    logEvent('script', 'gemini-3.5-flash', 'success', { segments: segments.length });
     return segments;
   } catch (error: any) {
-    logEvent('script', 'gemini-3-flash-preview', 'failed', { error: error.message });
+    logEvent('script', 'gemini-3.5-flash', 'failed', { error: error.message });
     throw new Error(`Failed to analyze script for video generation: ${error.message}`);
   }
 };
@@ -174,9 +180,10 @@ export const generateVeoClip = async (
   aspectRatio: '16:9' | '9:16',
   durationSeconds: 4 | 6 | 8,
   model: 'veo-3.1-generate-001' | 'veo-3.1-fast-generate-001',
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  gamingDevice?: string
 ): Promise<string> => {
-  const refinedPrompt = constructVeoGenerationPrompt(prompt, dialogue, durationSeconds);
+  const refinedPrompt = constructVeoGenerationPrompt(prompt, dialogue, durationSeconds, gamingDevice);
 
   if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
 
@@ -205,13 +212,13 @@ export const generateVeoClip = async (
     throw err;
   }
 
-  // Step 2: Poll for operation completion (max 180 seconds)
-  const MAX_POLL_MS = 180_000;
+  // Step 2: Poll for operation completion (max 300 seconds)
+  const MAX_POLL_MS = 300_000;
   const pollStartTime = Date.now();
   while (true) {
     if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
     if (Date.now() - pollStartTime > MAX_POLL_MS) {
-      throw new Error(`Video generation timed out after 180 seconds. The operation may still be running.`);
+      throw new Error(`Video generation timed out after 300 seconds. The operation may still be running.`);
     }
     await new Promise(resolve => setTimeout(resolve, 5000));
     if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
@@ -270,4 +277,39 @@ export const generateVeoClip = async (
       throw new Error(`Download error: ${err.message}`);
     }
   }
+};
+
+/**
+ * Server-side video stitching via FFmpeg.
+ * Uploads clip blobs to the server and concatenates them losslessly.
+ * Returns the stitched video as a Blob.
+ */
+export const stitchClipsServer = async (
+    clipUrls: string[],
+    onProgress?: (msg: string) => void
+): Promise<Blob> => {
+    const formData = new FormData();
+
+    for (let i = 0; i < clipUrls.length; i++) {
+        if (onProgress) onProgress(`Preparing clip ${i + 1} / ${clipUrls.length}...`);
+        const resp = await fetch(clipUrls[i]);
+        const blob = await resp.blob();
+        formData.append('clips', blob, `clip_${i}.mp4`);
+    }
+
+    if (onProgress) onProgress('Stitching on server...');
+
+    const token = sessionStorage.getItem('gh_id_token');
+    const res = await authFetch('/api/gemini/stitch-clips', {
+        method: 'POST',
+        headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+        body: formData,
+    });
+
+    if (!res.ok) {
+        const errText = await res.text().catch(() => res.statusText);
+        throw new Error(`Stitch failed: ${errText}`);
+    }
+
+    return res.blob();
 };

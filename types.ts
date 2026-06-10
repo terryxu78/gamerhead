@@ -3,14 +3,17 @@ export type TargetAspectRatio = '16:9' | '9:16';
 export type LayoutType = 'classic-pip' | 'stacked' | 'streamer-only';
 export type PipPlacement = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right';
 export type StackedPlacement = 'top' | 'bottom' | 'left' | 'right';
-export type GamingDevice = 'Mobile (Vertical)' | 'Mobile (Horizontal)' | 'PC' | 'Console';
+export type GamingDevice = 'Mobile (Vertical)' | 'Mobile (Horizontal)' | 'PC' | 'Console' | 'Hands-free (No device)';
+export type DialoguePacking = 'Slow' | 'Normal' | 'Fast';
 
 export interface GameInfo {
   title: string;
   url: string;
+  searchGrounding: boolean;
   cta: string;
   videoFile: File | null;
   gamingDevice: GamingDevice;
+  dialoguePacking: DialoguePacking;
   additionalInstructions: string;
   targetAspectRatio: TargetAspectRatio;
   layoutType: LayoutType;
@@ -58,6 +61,9 @@ export interface VeoSegment {
   isGenerating?: boolean;
   generatedAt?: number; // Timestamp to track continuity
   startingFrame?: 'avatar' | 'continuity'; // New field for user preference
+  videoOptions?: string[];
+  selectedOptionIndex?: number;
+  generatedUsingPrevUrl?: string;
 }
 
 export interface StudioState {

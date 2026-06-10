@@ -338,26 +338,49 @@ const ProjectForm: React.FC<ProjectFormProps> = ({
             />
           </div>
 
-          {/* URL */}
-          <div>
-            <label className="block text-sm font-bold text-gray-300 mb-2">Game Link <span className="text-google-red">*</span></label>
-            <input
-              type="url"
-              name="url"
-              value={form.url}
-              onChange={onChange}
-              disabled={isLoading}
-              placeholder="https://store.steampowered.com/app/..."
-              className="w-full bg-[#2D2D2D] border border-gray-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-google-blue focus:border-transparent outline-none transition-all placeholder-gray-500 disabled:opacity-50 disabled:cursor-not-allowed"
-            />
+          {/* Google Search Grounding */}
+          <div className="bg-[#2D2D2D] p-5 rounded-xl border border-gray-700 space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <label className="block text-sm font-bold text-gray-200">Google Search Grounding</label>
+                <p className="text-xs text-gray-400 mt-1">
+                  Enabling research on the game features to give the streamer more context and freedom to promote the game relevant to the gameplay.
+                </p>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer shrink-0 ml-4">
+                <input
+                  type="checkbox"
+                  checked={form.searchGrounding || false}
+                  onChange={(e) => setFieldValue('searchGrounding', e.target.checked)}
+                  disabled={isLoading}
+                  className="sr-only peer"
+                />
+                <div className="w-11 h-6 bg-gray-700 rounded-full peer peer-focus:ring-2 peer-focus:ring-google-blue peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-0.5 after:left-[2px] after:bg-gray-300 after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-google-blue peer-checked:after:bg-white peer-checked:after:border-white"></div>
+              </label>
+            </div>
+
+            {form.searchGrounding && (
+              <div className="animate-fade-in pt-2">
+                <label className="block text-xs font-bold text-gray-300 mb-2">Game URL <span className="text-google-red">*</span></label>
+                <input
+                  type="url"
+                  name="url"
+                  value={form.url || ''}
+                  onChange={onChange}
+                  disabled={isLoading}
+                  placeholder="e.g. https://store.steampowered.com/app/123456/Cyber_Rush/"
+                  className="w-full bg-[#1e1e1e] border border-gray-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-google-blue focus:border-transparent outline-none transition-all placeholder-gray-500 disabled:opacity-50"
+                />
+              </div>
+            )}
           </div>
 
            {/* Gaming Device */}
            <div>
             <label className="block text-sm font-bold text-gray-300 mb-2">Gaming Device <span className="text-google-red">*</span></label>
             <p className="text-xs text-gray-500 mb-2">This determines how the streamer interacts with the game in the generated video.</p>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                {(['PC', 'Console', 'Mobile (Vertical)', 'Mobile (Horizontal)'] as GamingDevice[]).map((device) => (
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+                {(['PC', 'Console', 'Mobile (Vertical)', 'Mobile (Horizontal)', 'Hands-free (No device)'] as GamingDevice[]).map((device) => (
                     <button
                         key={device}
                         type="button"
@@ -369,8 +392,9 @@ const ProjectForm: React.FC<ProjectFormProps> = ({
                             : 'bg-[#2D2D2D] border-gray-600 text-gray-400 hover:border-gray-500 hover:text-gray-200'
                         }`}
                     >
-                        {device === 'Mobile (Vertical)' ? 'Mobile (Port.)' : 
-                         device === 'Mobile (Horizontal)' ? 'Mobile (Land.)' : device}
+                        {device === 'Mobile (Vertical)' ? 'Mobile (Port.)' :
+                         device === 'Mobile (Horizontal)' ? 'Mobile (Land.)' :
+                         device === 'Hands-free (No device)' ? 'Hands-free' : device}
                     </button>
                 ))}
             </div>
@@ -388,6 +412,31 @@ const ProjectForm: React.FC<ProjectFormProps> = ({
               placeholder="e.g. Download on Steam today for 20% off!"
               className="w-full bg-[#2D2D2D] border border-gray-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-google-blue focus:border-transparent outline-none transition-all placeholder-gray-500 disabled:opacity-50 disabled:cursor-not-allowed"
             />
+          </div>
+
+          {/* Streamer Dialogue Packing */}
+          <div>
+            <label className="block text-sm font-bold text-gray-300 mb-2">Streamer Dialogue Packing <span className="text-google-red">*</span></label>
+            <p className="text-xs text-gray-500 mb-2">
+                This determines how fast and how much the streamer will speak. Use normal for best results.
+            </p>
+            <div className="flex gap-3">
+                {(['Slow', 'Normal', 'Fast'] as const).map((pacing) => (
+                    <button
+                        key={pacing}
+                        type="button"
+                        onClick={() => setFieldValue('dialoguePacking', pacing)}
+                        disabled={isLoading}
+                        className={`px-6 py-2 rounded-lg text-xs font-semibold border transition-all ${
+                            form.dialoguePacking === pacing
+                            ? 'bg-google-blue/20 border-google-blue text-google-blue font-bold shadow-sm'
+                            : 'bg-[#2D2D2D] border-gray-600 text-gray-400 hover:border-gray-500 hover:text-gray-200'
+                        }`}
+                    >
+                        {pacing}
+                    </button>
+                ))}
+            </div>
           </div>
 
           {/* Additional Instructions */}

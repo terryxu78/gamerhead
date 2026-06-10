@@ -4,12 +4,72 @@ import NeonButton from './NeonButton';
 import { AvatarConfig } from '../types';
 import { generateStreamerAvatar } from '../services/gemini';
 
+const checkImageRatio = (
+  base64Str: string,
+  targetRatioStr: '16:9' | '9:16',
+  onResult: (needsCrop: boolean) => void
+) => {
+  const img = new Image();
+  img.src = base64Str;
+  img.onload = () => {
+    const currentRatio = img.width / img.height;
+    const targetRatio = targetRatioStr === '9:16' ? 9 / 16 : 16 / 9;
+    onResult(Math.abs(currentRatio - targetRatio) > 0.05);
+  };
+  img.onerror = () => {
+    onResult(false);
+  };
+};
+
+const cropImageToRatio = (
+  base64Str: string,
+  targetRatioStr: '16:9' | '9:16',
+  onComplete: (croppedBase64: string) => void
+) => {
+  const img = new Image();
+  img.src = base64Str;
+  img.onload = () => {
+    const currentRatio = img.width / img.height;
+    const targetRatio = targetRatioStr === '9:16' ? 9 / 16 : 16 / 9;
+
+    if (Math.abs(currentRatio - targetRatio) <= 0.05) {
+      onComplete(base64Str);
+      return;
+    }
+
+    const canvas = document.createElement('canvas');
+    let targetWidth = img.width;
+    let targetHeight = img.height;
+
+    if (currentRatio > targetRatio) {
+      targetWidth = img.height * targetRatio;
+    } else {
+      targetHeight = img.width / targetRatio;
+    }
+
+    canvas.width = targetWidth;
+    canvas.height = targetHeight;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      const offsetX = (img.width - targetWidth) / 2;
+      const offsetY = (img.height - targetHeight) / 2;
+      ctx.drawImage(img, offsetX, offsetY, targetWidth, targetHeight, 0, 0, targetWidth, targetHeight);
+      onComplete(canvas.toDataURL('image/png'));
+    } else {
+      onComplete(base64Str);
+    }
+  };
+  img.onerror = () => {
+    onComplete(base64Str);
+  };
+};
+
 interface AvatarGeneratorProps {
-    externalConfig?: AvatarConfig;
-    setExternalConfig?: (config: AvatarConfig) => void;
-    onImageGenerated?: (imageUrl: string) => void;
-    forcedAspectRatio?: '16:9' | '9:16' | null;
-    gamingDevice?: string;
+  externalConfig?: AvatarConfig;
+  setExternalConfig?: (config: AvatarConfig) => void;
+  onImageGenerated?: (imageUrl: string) => void;
+  forcedAspectRatio?: '16:9' | '9:16' | null;
+  gamingDevice?: string;
 }
 
 const AvatarGenerator: React.FC<AvatarGeneratorProps> = ({ externalConfig, setExternalConfig, onImageGenerated, forcedAspectRatio, gamingDevice }) => {
@@ -19,28 +79,38 @@ const AvatarGenerator: React.FC<AvatarGeneratorProps> = ({ externalConfig, setEx
     aspectRatio: '16:9',
     model: 'gemini-3.1-flash-image-preview'  // Vertex AI global endpoint image model
   });
-  
+
   // Use external state if provided, else local
   const config = externalConfig || localConfig;
-  const setConfig = setExternalConfig || setLocalConfig;
+  const setConfig = React.useCallback((updater: AvatarConfig | ((prev: AvatarConfig) => AvatarConfig)) => {
+    setLocalConfig(prev => {
+      const next = typeof updater === 'function' ? updater(prev) : updater;
+      if (setExternalConfig) {
+        setExternalConfig(next);
+      }
+      return next;
+    });
+  }, [setExternalConfig]);
 
   const [generatedImage, setGeneratedImage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showCropAlert, setShowCropAlert] = useState(false);
+  const [pendingReferenceImage, setPendingReferenceImage] = useState<string | null>(null);
 
   // Sync forced ratio if it changes
   useEffect(() => {
     if (forcedAspectRatio) {
-        setConfig(prev => ({ ...prev, aspectRatio: forcedAspectRatio }));
+      setConfig(prev => ({ ...prev, aspectRatio: forcedAspectRatio }));
     }
   }, [forcedAspectRatio, setConfig]);
 
   const handleGenerate = async () => {
     if (!config.appearance || !config.setting) {
-        setError("Please describe both appearance and setting.");
-        return;
+      setError("Please describe both appearance and setting.");
+      return;
     }
-    
+
     setIsLoading(true);
     setError(null);
     setGeneratedImage(null);
@@ -81,7 +151,17 @@ const AvatarGenerator: React.FC<AvatarGeneratorProps> = ({ externalConfig, setEx
   };
 
   const clearReferenceImage = () => {
-      setConfig(prev => ({ ...prev, referenceImage: undefined }));
+    setConfig(prev => ({ ...prev, referenceImage: undefined }));
+    if (generatedImage && generatedImage === config.referenceImage) {
+      setGeneratedImage(null);
+      if (onImageGenerated) onImageGenerated('');
+    }
+  };
+
+  const handleClearAvatar = () => {
+    setGeneratedImage(null);
+    if (onImageGenerated) onImageGenerated('');
+    setError(null);
   };
 
   return (
@@ -93,51 +173,79 @@ const AvatarGenerator: React.FC<AvatarGeneratorProps> = ({ externalConfig, setEx
         </h2>
 
         <div className="space-y-6">
-          
+
           {/* Reference Image Upload */}
           <div>
-              <label className="block text-sm font-bold text-gray-300 mb-2">Reference Image (Optional)</label>
-              {!config.referenceImage ? (
-                  <div className="border-2 border-dashed border-gray-600 rounded-lg p-4 text-center hover:border-google-blue hover:bg-blue-900/10 transition-all cursor-pointer relative">
-                      <input 
-                          type="file" 
-                          accept="image/*" 
-                          onChange={handleImageUpload}
-                          className="absolute inset-0 opacity-0 cursor-pointer"
-                      />
-                      <div className="text-gray-400 text-sm">
-                          <span className="text-2xl block mb-1">🖼️</span>
-                          <span className="font-bold text-google-blue">Click to upload</span> or drag and drop
-                          <p className="text-xs text-gray-500 mt-1">Use a character or person as a base</p>
-                      </div>
-                  </div>
-              ) : (
-                  <div className="relative rounded-lg overflow-hidden border border-gray-600 group">
-                      <img src={config.referenceImage} alt="Reference" className="w-full h-32 object-cover opacity-70 group-hover:opacity-100 transition-opacity" />
-                      <button 
-                          onClick={clearReferenceImage}
-                          className="absolute top-2 right-2 bg-black/70 text-white p-1 rounded-full hover:bg-red-600 transition-colors"
-                          title="Remove image"
-                      >
-                          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-                      </button>
-                      <div className="absolute bottom-2 left-2 bg-black/70 text-white text-xs px-2 py-1 rounded">
-                          Reference Active
-                      </div>
-                  </div>
-              )}
+            <label className="block text-sm font-bold text-gray-300 mb-2">Reference Image (Optional)</label>
+            {!config.referenceImage ? (
+              <div className="border-2 border-dashed border-gray-600 rounded-lg p-4 text-center hover:border-google-blue hover:bg-blue-900/10 transition-all cursor-pointer relative">
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={handleImageUpload}
+                  className="absolute inset-0 opacity-0 cursor-pointer"
+                />
+                <div className="text-gray-400 text-sm">
+                  <span className="text-2xl block mb-1">🖼️</span>
+                  <span className="font-bold text-google-blue">Click to upload</span> or drag and drop
+                  <p className="text-xs text-gray-500 mt-1">Use a character or person as a base</p>
+                </div>
+              </div>
+            ) : (
+              <div className="relative rounded-lg overflow-hidden border border-gray-600 group">
+                <img src={config.referenceImage} alt="Reference" className="w-full h-32 object-cover opacity-70 group-hover:opacity-100 transition-opacity" />
+                <button
+                  onClick={clearReferenceImage}
+                  className="absolute top-2 right-2 bg-black/70 text-white p-1 rounded-full hover:bg-red-600 transition-colors"
+                  title="Remove image"
+                >
+                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
+                </button>
+                <div className="absolute bottom-2 left-2 bg-black/70 text-white text-xs px-2 py-1 rounded">
+                  Reference Active
+                </div>
+              </div>
+            )}
           </div>
+
+          {config.referenceImage && (
+            <div className="flex flex-col gap-2 p-4 rounded-2xl bg-[#1E1E1E] border border-gray-700/60 shadow-inner animate-fade-in">
+              <p className="text-xs text-gray-400 font-medium">
+                ✨ You can use this reference image directly for production, or write prompts to generate a new avatar based on it.
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  if (config.referenceImage) {
+                    checkImageRatio(config.referenceImage, config.aspectRatio, (needsCrop) => {
+                      if (needsCrop) {
+                        setPendingReferenceImage(config.referenceImage!);
+                        setShowCropAlert(true);
+                      } else {
+                        setGeneratedImage(config.referenceImage!);
+                        if (onImageGenerated) onImageGenerated(config.referenceImage!);
+                        setError(null);
+                      }
+                    });
+                  }
+                }}
+                className="w-full py-2.5 px-4 bg-google-green/20 hover:bg-google-green/30 border border-google-green/45 hover:border-google-green text-google-green rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 active:scale-[0.98]"
+              >
+                <span>🚀</span> Use Reference Directly
+              </button>
+            </div>
+          )}
 
           <div>
             <label className="block text-sm font-bold text-gray-300 mb-2">
-                {config.referenceImage ? 'Avatar Description (Action/Pose)' : 'Streamer Appearance'}
+              {config.referenceImage ? 'Avatar Description (Action/Pose)' : 'Streamer Appearance'}
             </label>
             <textarea
               value={config.appearance}
               onChange={(e) => setConfig({ ...config, appearance: e.target.value })}
-              placeholder={config.referenceImage 
-                  ? "Describe what they are doing, e.g. Holding a mobile phone, wearing headphones, looking excited." 
-                  : "Female asian gamer in her 20s with blonde hair"}
+              placeholder={config.referenceImage
+                ? "Describe what they are doing, e.g. Holding a mobile phone, wearing headphones, looking excited."
+                : "Female asian gamer in her 20s with blonde hair"}
               rows={3}
               className="w-full bg-[#2D2D2D] border border-gray-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-google-blue focus:border-transparent outline-none transition-all resize-none placeholder-gray-500"
             />
@@ -157,94 +265,152 @@ const AvatarGenerator: React.FC<AvatarGeneratorProps> = ({ externalConfig, setEx
           {/* Model Selection Removed */}
 
           <div>
-             <div className="flex justify-between items-center mb-3">
-                 <label className="block text-sm font-bold text-gray-300">Aspect Ratio</label>
-                 {forcedAspectRatio && (
-                     <span className="text-[10px] bg-blue-900/40 border border-blue-800 text-blue-200 px-2 py-1 rounded-full flex items-center gap-1 font-bold">
-                         <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
-                         Locked to Gameplay ({forcedAspectRatio})
-                     </span>
-                 )}
-             </div>
-             
-             <div className="flex gap-4">
-                {['16:9', '9:16'].map((ratio) => (
-                    <button
-                        key={ratio}
-                        disabled={!!forcedAspectRatio}
-                        onClick={() => setConfig({ ...config, aspectRatio: ratio as any })}
-                        className={`px-4 py-2 rounded-lg border text-sm font-medium transition-all ${
-                            config.aspectRatio === ratio 
-                            ? 'bg-blue-900/30 border-google-blue text-google-blue' 
-                            : 'bg-[#2D2D2D] border-gray-600 text-gray-400 hover:border-gray-400'
-                        } ${forcedAspectRatio ? 'opacity-60 cursor-not-allowed' : ''}`}
-                    >
-                        {ratio}
-                    </button>
-                ))}
-             </div>
+            <div className="flex justify-between items-center mb-3">
+              <label className="block text-sm font-bold text-gray-300">Aspect Ratio</label>
+              {forcedAspectRatio && (
+                <span className="text-[10px] bg-blue-900/40 border border-blue-800 text-blue-200 px-2 py-1 rounded-full flex items-center gap-1 font-bold">
+                  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
+                  Locked to Gameplay ({forcedAspectRatio})
+                </span>
+              )}
+            </div>
+
+            <div className="flex gap-4">
+              {['16:9', '9:16'].map((ratio) => (
+                <button
+                  key={ratio}
+                  disabled={!!forcedAspectRatio}
+                  onClick={() => setConfig({ ...config, aspectRatio: ratio as any })}
+                  className={`px-4 py-2 rounded-lg border text-sm font-medium transition-all ${config.aspectRatio === ratio
+                      ? 'bg-blue-900/30 border-google-blue text-google-blue'
+                      : 'bg-[#2D2D2D] border-gray-600 text-gray-400 hover:border-gray-400'
+                    } ${forcedAspectRatio ? 'opacity-60 cursor-not-allowed' : ''}`}
+                >
+                  {ratio}
+                </button>
+              ))}
+            </div>
           </div>
 
           <div className="pt-4">
-            <NeonButton 
-                onClick={handleGenerate} 
-                isLoading={isLoading} 
-                variant="primary"
-                className="w-full shadow-md"
+            <NeonButton
+              onClick={handleGenerate}
+              isLoading={isLoading}
+              variant="primary"
+              className="w-full shadow-md"
             >
               {isLoading ? 'Generating...' : 'Generate Avatar'}
             </NeonButton>
           </div>
 
           {error && (
-              <div className="p-4 bg-red-900/20 border border-red-900/50 text-red-300 rounded-lg text-sm text-center">
-                  {error}
-              </div>
+            <div className="p-4 bg-red-900/20 border border-red-900/50 text-red-300 rounded-lg text-sm text-center">
+              {error}
+            </div>
           )}
         </div>
       </div>
 
       {/* Right: Preview */}
       <div className="h-[600px] lg:h-auto min-h-[500px] rounded-3xl bg-google-surface border border-gray-700 shadow-card flex flex-col items-center justify-center relative overflow-hidden">
-          {generatedImage ? (
-              <div className="w-full h-full flex flex-col p-6">
-                  <div className="flex-1 min-h-0 flex items-center justify-center">
-                    <img 
-                      src={generatedImage} 
-                      alt="Generated Streamer Avatar" 
-                      className="max-h-full max-w-full object-contain rounded-xl shadow-float"
-                    />
-                  </div>
-                  <div className="mt-6 flex justify-center shrink-0">
-                    <button
-                        onClick={handleDownload}
-                        className="flex items-center gap-2 px-6 py-2.5 bg-[#2D2D2D] border border-gray-600 hover:bg-gray-700 text-gray-200 rounded-full transition-colors shadow-sm font-medium text-sm"
-                    >
-                        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-                        </svg>
-                        Download Image
-                    </button>
-                  </div>
-              </div>
-          ) : (
-              <div className="text-center p-8">
-                 <div className="w-24 h-24 mx-auto mb-6 rounded-full bg-gray-800 flex items-center justify-center border border-gray-700">
-                    {isLoading ? (
-                         <div className="w-12 h-12 border-4 border-google-blue border-t-transparent rounded-full animate-spin"></div>
-                    ) : (
-                        <span className="text-4xl">👤</span>
-                    )}
-                 </div>
-                 <h3 className="text-xl font-bold text-gray-200">
-                    {isLoading ? 'Creating persona...' : 'No Avatar Yet'}
-                 </h3>
-                 <p className="text-gray-500 mt-2 max-w-xs mx-auto">
-                    Fill out the details on the left to generate a unique streamer identity.
-                 </p>
-              </div>
-          )}
+        {generatedImage ? (
+          <div className="w-full h-full flex flex-col p-6">
+            <div className="flex-1 min-h-0 flex items-center justify-center">
+              <img
+                src={generatedImage}
+                alt="Generated Streamer Avatar"
+                className="max-h-full max-w-full object-contain rounded-xl shadow-float"
+              />
+            </div>
+            <div className="mt-6 flex justify-center shrink-0">
+              <button
+                onClick={handleDownload}
+                className="flex items-center gap-2 px-6 py-2.5 bg-[#2D2D2D] border border-gray-600 hover:bg-gray-700 text-gray-200 rounded-full transition-colors shadow-sm font-medium text-sm"
+              >
+                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+                </svg>
+                Download Image
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="text-center p-8">
+            <div className="w-24 h-24 mx-auto mb-6 rounded-full bg-gray-800 flex items-center justify-center border border-gray-700">
+              {isLoading ? (
+                <div className="w-12 h-12 border-4 border-google-blue border-t-transparent rounded-full animate-spin"></div>
+              ) : (
+                <span className="text-4xl">👤</span>
+              )}
+            </div>
+            <h3 className="text-xl font-bold text-gray-200">
+              {isLoading ? 'Creating persona...' : 'No Avatar Yet'}
+            </h3>
+            <p className="text-gray-500 mt-2 max-w-xs mx-auto">
+              Fill out the details on the left to generate a unique streamer identity.
+            </p>
+          </div>
+        )}
       </div>
+
+      {showCropAlert && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm animate-fade-in">
+          <div className="bg-[#1E1E1E] border border-gray-700 rounded-3xl p-8 max-w-md w-full mx-4 shadow-2xl relative animate-scale-in">
+            <div className="flex items-center gap-3 mb-4">
+              <span className="text-3xl">📐</span>
+              <h3 className="text-xl font-bold text-white">Aspect Ratio Mismatch</h3>
+            </div>
+
+            <p className="text-sm text-gray-300 mb-6 leading-relaxed">
+              Your uploaded reference image does not match the target aspect ratio of <span className="font-semibold text-google-blue">{config.aspectRatio}</span>.
+              To proceed, you can automatically center-crop the image to fit, or generate a brand new avatar using AI.
+            </p>
+
+            <div className="flex flex-col gap-3">
+              <button
+                type="button"
+                onClick={() => {
+                  if (pendingReferenceImage) {
+                    cropImageToRatio(pendingReferenceImage, config.aspectRatio, (cropped) => {
+                      setGeneratedImage(cropped);
+                      if (onImageGenerated) onImageGenerated(cropped);
+                      setError(null);
+                    });
+                  }
+                  setShowCropAlert(false);
+                  setPendingReferenceImage(null);
+                }}
+                className="w-full py-3 px-4 bg-google-blue hover:bg-google-blue/80 text-white rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 active:scale-[0.98]"
+              >
+                <span>✂️</span> Crop to {config.aspectRatio} and Use
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setShowCropAlert(false);
+                  setPendingReferenceImage(null);
+                  handleGenerate();
+                }}
+                className="w-full py-3 px-4 bg-google-green/25 hover:bg-google-green/35 border border-google-green/45 hover:border-google-green text-google-green rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-2 active:scale-[0.98]"
+              >
+                <span>🤖</span> Generate New Avatar with AI
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setShowCropAlert(false);
+                  setPendingReferenceImage(null);
+                }}
+                className="w-full py-2 px-4 bg-transparent border border-gray-600 hover:border-gray-500 text-gray-400 hover:text-gray-200 rounded-xl text-xs font-semibold transition-all active:scale-[0.98]"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

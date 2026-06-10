@@ -2,8 +2,8 @@
 import React, { useState, useRef, useCallback } from 'react';
 import NeonButton from './NeonButton';
 import { ScriptResult, AvatarConfig, VeoSegment, LayoutType, TargetAspectRatio, PipPlacement, StackedPlacement } from '../types';
-import { generateVeoClip } from '../services/gemini';
-import { stitchClips, compositePipVideo } from '../utils/videoUtils';
+import { generateVeoClip, stitchClipsServer } from '../services/gemini';
+import { compositePipVideo } from '../utils/videoUtils';
 import { logEvent } from '../services/logging';
 
 interface StudioProps {
@@ -21,23 +21,25 @@ interface StudioProps {
   isLoading: boolean;
   statusMessage: string;
   externalError: string | null;
+  gamingDevice?: string;
 }
 
-const Studio: React.FC<StudioProps> = ({ 
-    scriptResult, 
-    segments, 
+const Studio: React.FC<StudioProps> = ({
+    scriptResult,
+    segments,
     setSegments,
-    avatarImage, 
-    avatarConfig, 
-    gameplayFile, 
-    layoutType, 
-    targetAspectRatio, 
-    pipPlacement, 
-    stackedPlacement, 
-    onGenerateScript, 
-    isLoading, 
-    statusMessage, 
-    externalError 
+    avatarImage,
+    avatarConfig,
+    gameplayFile,
+    layoutType,
+    targetAspectRatio,
+    pipPlacement,
+    stackedPlacement,
+    onGenerateScript,
+    isLoading,
+    statusMessage,
+    externalError,
+    gamingDevice
 }) => {
   const [error, setError] = useState<string | null>(null);
   
@@ -56,6 +58,9 @@ const Studio: React.FC<StudioProps> = ({
 
   // Veo Model Selection
   const [veoModel, setVeoModel] = useState<'veo-3.1-generate-001' | 'veo-3.1-fast-generate-001'>('veo-3.1-generate-001');
+
+  // Generation Mode Selection (Single vs 2 Options)
+  const [genMode, setGenMode] = useState<'single' | 'options'>('single');
 
   const handleDownloadScript = () => {
       if (!scriptResult) return;
@@ -110,37 +115,53 @@ const Studio: React.FC<StudioProps> = ({
       }
   };
 
+  const selectSegmentOption = (index: number, optionIndex: number) => {
+      setSegments(prev => {
+          const newSegs = [...prev];
+          const seg = newSegs[index];
+          if (seg.videoOptions && seg.videoOptions[optionIndex]) {
+              newSegs[index] = {
+                  ...seg,
+                  selectedOptionIndex: optionIndex,
+                  videoUrl: seg.videoOptions[optionIndex]
+              };
+          }
+          return newSegs;
+      });
+  };
+
   const handleGenerateSegment = useCallback(async (index: number) => {
     // 1. Abort any PREVIOUSLY running generation (stops subsequent clips if they are running)
     if (abortControllerRef.current) {
         abortControllerRef.current.abort();
     }
-    
+
     // 2. Create new controller
     const controller = new AbortController();
     abortControllerRef.current = controller;
 
     let startImageBase64: string | null = null;
-    
+
     // Determine Strategy
     // Index 0 always uses avatar.
     // Index > 0 uses user preference (defaulting to 'continuity' if not set)
     const strategy = index === 0 ? 'avatar' : (segments[index].startingFrame || 'continuity');
+    const prevSegment = index > 0 ? segments[index - 1] : null;
+    const prevUrl = prevSegment?.videoUrl || null;
 
     if (strategy === 'avatar') {
         // Use original high-quality avatar
         startImageBase64 = avatarImage;
     } else {
         // Continuity point: Use previous frame
-        const prevSegment = segments[index - 1];
-        if (!prevSegment.videoUrl) {
+        if (!prevSegment || !prevUrl) {
             setError(`Cannot generate Shot ${index + 1}. Previous shot video is missing (Required for continuity).`);
             abortControllerRef.current = null;
             return;
         }
-        
+
         try {
-            startImageBase64 = await extractLastFrame(prevSegment.videoUrl);
+            startImageBase64 = await extractLastFrame(prevUrl);
         } catch (e) {
             console.error("Frame extraction failed", e);
             setError("Failed to extract starting frame from previous clip. Please regenerate previous clip.");
@@ -158,41 +179,87 @@ const Studio: React.FC<StudioProps> = ({
     // Update state to generating
     setSegments(prev => {
         const newSegs = [...prev];
-        newSegs[index] = { ...newSegs[index], isGenerating: true };
+        newSegs[index] = {
+            ...newSegs[index],
+            isGenerating: true,
+            videoUrl: undefined,
+            videoOptions: undefined,
+            selectedOptionIndex: undefined
+        };
         return newSegs;
     });
     setError(null);
 
     try {
-        const currentSegment = segments[index]; 
-        
-        // generateVeoClip now performs the download internally and returns a local Blob URL
-        const blobUrl = await generateVeoClip(
-            currentSegment.prompt,
-            currentSegment.dialogue, // Pass strict dialogue separately
-            startImageBase64,
-            avatarConfig.aspectRatio,
-            currentSegment.duration, // Pass strictly typed duration (4/6/8)
-            veoModel, // Pass selected model
-            controller.signal
-        );
+        const currentSegment = segments[index];
 
-        setSegments(prev => {
-            const newSegs = [...prev];
-            newSegs[index] = { 
-                ...newSegs[index], 
-                videoUrl: blobUrl, 
-                generatedAt: Date.now(),
-                isGenerating: false 
-            };
-            return newSegs;
-        });
-        
+        if (genMode === 'options') {
+            const p1 = generateVeoClip(
+                currentSegment.prompt,
+                currentSegment.dialogue,
+                startImageBase64,
+                avatarConfig.aspectRatio,
+                currentSegment.duration,
+                veoModel,
+                controller.signal,
+                gamingDevice
+            );
+            const p2 = generateVeoClip(
+                currentSegment.prompt,
+                currentSegment.dialogue,
+                startImageBase64,
+                avatarConfig.aspectRatio,
+                currentSegment.duration,
+                veoModel,
+                controller.signal,
+                gamingDevice
+            );
+
+            const [url1, url2] = await Promise.all([p1, p2]);
+
+            setSegments(prev => {
+                const newSegs = [...prev];
+                newSegs[index] = {
+                    ...newSegs[index],
+                    videoOptions: [url1, url2],
+                    videoUrl: undefined, // Needs user choice
+                    selectedOptionIndex: undefined,
+                    generatedAt: Date.now(),
+                    generatedUsingPrevUrl: prevUrl || undefined,
+                    isGenerating: false
+                };
+                return newSegs;
+            });
+        } else {
+            const blobUrl = await generateVeoClip(
+                currentSegment.prompt,
+                currentSegment.dialogue,
+                startImageBase64,
+                avatarConfig.aspectRatio,
+                currentSegment.duration,
+                veoModel,
+                controller.signal,
+                gamingDevice
+            );
+
+            setSegments(prev => {
+                const newSegs = [...prev];
+                newSegs[index] = {
+                    ...newSegs[index],
+                    videoUrl: blobUrl,
+                    generatedAt: Date.now(),
+                    generatedUsingPrevUrl: prevUrl || undefined,
+                    isGenerating: false
+                };
+                return newSegs;
+            });
+        }
+
         // Clear abort ref if we finished successfully without aborting
         if (abortControllerRef.current === controller) {
              abortControllerRef.current = null;
         }
-        
+
     } catch (err: any) {
         if (err.name === 'AbortError' || err.message?.includes('Aborted')) {
             console.log(`Generation for segment ${index} aborted.`);
@@ -200,18 +267,18 @@ const Studio: React.FC<StudioProps> = ({
             console.error(err);
             setError(err.message || `Generation failed for Segment ${index + 1}.`);
         }
-        
+
         setSegments(prev => {
             const newSegs = [...prev];
             newSegs[index] = { ...newSegs[index], isGenerating: false };
             return newSegs;
         });
-        
+
         if (abortControllerRef.current === controller) {
              abortControllerRef.current = null;
         }
     }
-  }, [segments, avatarImage, avatarConfig.aspectRatio, setSegments, veoModel]);
+  }, [segments, avatarImage, avatarConfig.aspectRatio, setSegments, veoModel, genMode, gamingDevice]);
 
   const updateSegmentField = (index: number, field: 'prompt' | 'dialogue', value: string) => {
       setSegments(prev => {
@@ -249,7 +316,7 @@ const Studio: React.FC<StudioProps> = ({
     
     try {
         // Force high quality (1080p, 10Mbps)
-        const stitchedBlob = await stitchClips(finalBlobs, undefined, true);
+        const stitchedBlob = await stitchClipsServer(finalBlobs, setExportProgress);
         const ext = stitchedBlob.type.includes('mp4') ? 'mp4' : 'webm';
         
         // Updated filename logic
@@ -298,7 +365,7 @@ const Studio: React.FC<StudioProps> = ({
       setExportProgress("Compositing Video (This may take a minute)...");
       
       try {
-          const stitchedStreamerBlob = await stitchClips(finalBlobs);
+          const stitchedStreamerBlob = await stitchClipsServer(finalBlobs, setExportProgress);
           const stitchedStreamerUrl = URL.createObjectURL(stitchedStreamerBlob);
           
           const finalBlob = await compositePipVideo(
@@ -407,6 +474,31 @@ const Studio: React.FC<StudioProps> = ({
                  <span className="text-xs bg-gray-800 text-gray-400 px-2 py-1 rounded border border-gray-700">Format: {targetAspectRatio}</span>
                  <span className="text-xs bg-gray-800 text-gray-400 px-2 py-1 rounded border border-gray-700">Layout: {layoutType}</span>
              </div>
+             {scriptResult?.groundingUrls && scriptResult.groundingUrls.length > 0 && (
+                 <div className="mt-3 flex flex-wrap gap-2 items-center">
+                     <span className="text-xs text-google-blue font-bold flex items-center gap-1 shrink-0">
+                         🔍 Researched Sources:
+                     </span>
+                     {scriptResult.groundingUrls.map((url, idx) => {
+                         let display = `Source ${idx + 1}`;
+                         try {
+                             display = new URL(url).hostname.replace('www.', '');
+                         } catch { /* ignore */ }
+                         return (
+                             <a
+                                 key={idx}
+                                 href={url}
+                                 target="_blank"
+                                 rel="noopener noreferrer"
+                                 className="text-[10px] bg-blue-900/20 text-blue-300 hover:text-white px-2 py-0.5 rounded border border-blue-900/50 hover:bg-google-blue/30 transition-all truncate max-w-[150px]"
+                                 title={url}
+                             >
+                                 {display}
+                             </a>
+                         );
+                     })}
+                 </div>
+             )}
          </div>
          <button 
               onClick={handleDownloadScript}
@@ -426,37 +518,67 @@ const Studio: React.FC<StudioProps> = ({
       {/* Segments List */}
       <div className="space-y-12">
             
-            {/* Toolbar Area - Split into Left (Model) and Right (Actions) */}
+            {/* Toolbar Area - Split into Left (Model/Options) and Right (Actions) */}
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end sticky top-20 z-20 pointer-events-none gap-4 mb-6">
-                
-                {/* Left: Model Selector */}
-                <div className="pointer-events-auto bg-[#2D2D2D] p-1.5 rounded-xl border border-gray-700 shadow-float backdrop-blur-md">
-                     <div className="flex gap-1">
-                        <button
-                            onClick={() => setVeoModel('veo-3.1-generate-001')}
-                            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                                veoModel === 'veo-3.1-generate-001'
-                                ? 'bg-google-blue text-gray-900 shadow-sm'
-                                : 'text-gray-400 hover:text-white hover:bg-white/5'
-                            }`}
-                        >
-                            Veo 3.1 Standard
-                        </button>
-                        <button
-                             onClick={() => setVeoModel('veo-3.1-fast-generate-001')}
-                             className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1 ${
-                                veoModel === 'veo-3.1-fast-generate-001'
-                                ? 'bg-google-green text-gray-900 shadow-sm'
-                                : 'text-gray-400 hover:text-white hover:bg-white/5'
-                            }`}
-                        >
-                            <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z" clipRule="evenodd" /></svg>
-                            Veo 3.1 Fast
-                        </button>
-                     </div>
-                     <div className="mt-2 text-[10px] text-gray-400 max-w-[200px] leading-tight px-1 pb-1">
-                        Changing this midway applies to all subsequent clip generations.
-                     </div>
+
+                {/* Left: Model & Mode Selectors */}
+                <div className="pointer-events-auto flex flex-col md:flex-row gap-3">
+                    <div className="bg-[#2D2D2D] p-1.5 rounded-xl border border-gray-700 shadow-float backdrop-blur-md">
+                         <div className="flex gap-1">
+                            <button
+                                onClick={() => setVeoModel('veo-3.1-generate-001')}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                                    veoModel === 'veo-3.1-generate-001'
+                                    ? 'bg-google-blue text-gray-900 shadow-sm'
+                                    : 'text-gray-400 hover:text-white hover:bg-white/5'
+                                }`}
+                            >
+                                Veo 3.1 Standard
+                            </button>
+                            <button
+                                 onClick={() => setVeoModel('veo-3.1-fast-generate-001')}
+                                 className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1 ${
+                                    veoModel === 'veo-3.1-fast-generate-001'
+                                    ? 'bg-google-green text-gray-900 shadow-sm'
+                                    : 'text-gray-400 hover:text-white hover:bg-white/5'
+                                }`}
+                            >
+                                <svg className="w-3 h-3" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z" clipRule="evenodd" /></svg>
+                                Veo 3.1 Fast
+                            </button>
+                         </div>
+                         <div className="mt-1.5 text-[9px] text-gray-400 max-w-[200px] leading-tight px-1">
+                            Applies to subsequent generations.
+                         </div>
+                    </div>
+
+                    <div className="bg-[#2D2D2D] p-1.5 rounded-xl border border-gray-700 shadow-float backdrop-blur-md">
+                         <div className="flex gap-1">
+                            <button
+                                onClick={() => setGenMode('single')}
+                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                                    genMode === 'single'
+                                    ? 'bg-google-blue text-gray-900 shadow-sm'
+                                    : 'text-gray-400 hover:text-white hover:bg-white/5'
+                                }`}
+                            >
+                                Single Clip
+                            </button>
+                            <button
+                                 onClick={() => setGenMode('options')}
+                                 className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                                    genMode === 'options'
+                                    ? 'bg-google-blue text-gray-900 shadow-sm'
+                                    : 'text-gray-400 hover:text-white hover:bg-white/5'
+                                }`}
+                            >
+                                2 Options (Parallel)
+                            </button>
+                         </div>
+                         <div className="mt-1.5 text-[9px] text-gray-400 max-w-[200px] leading-tight px-1">
+                            Choose 1 of 2 before final editing.
+                         </div>
+                    </div>
                 </div>
 
                 {/* Right: Actions */}
@@ -501,8 +623,8 @@ const Studio: React.FC<StudioProps> = ({
                     
                     const canGenerate = prevHasVideo && !seg.isGenerating;
                     
-                    // Continuity Check logic
-                    const isStale = needsPrevious && segments[idx-1].generatedAt && seg.generatedAt && segments[idx-1].generatedAt > seg.generatedAt;
+                    // Continuity Check logic: warning displayed if generated using prev URL but now that URL has changed
+                    const isStale = needsPrevious && !!seg.videoUrl && seg.generatedUsingPrevUrl !== segments[idx-1].videoUrl;
                     
                     return (
                         <div key={idx} className={`bg-google-surface border rounded-2xl overflow-hidden shadow-card transition-shadow hover:shadow-card-hover ${isStale ? 'border-orange-500/50' : 'border-gray-700'}`}>
@@ -582,48 +704,102 @@ const Studio: React.FC<StudioProps> = ({
                                         </div>
                                     )}
 
-                                    {!seg.videoUrl ? (
+                                    {seg.isGenerating ? (
+                                        <>
+                                            <div className="w-10 h-10 border-4 border-google-blue border-t-transparent rounded-full animate-spin mb-2"></div>
+                                            <span className="text-[11px] text-google-blue font-bold">Generating...</span>
+                                            {genMode === 'options' && (
+                                                <span className="text-[9px] text-gray-500">Producing 2 Options</span>
+                                            )}
+                                        </>
+                                    ) : (!seg.videoUrl && !seg.videoOptions) ? (
                                         <>
                                             <div className="w-12 h-12 rounded-full bg-google-surface border border-gray-600 shadow-sm flex items-center justify-center">
                                                 <span className="text-xl text-gray-400">⬇️</span>
                                             </div>
-                                            <NeonButton 
+                                            <NeonButton
                                                 onClick={() => handleGenerateSegment(idx)}
                                                 disabled={!canGenerate}
                                                 isLoading={seg.isGenerating}
                                                 className="w-full text-xs shadow-sm"
                                                 variant="secondary"
                                             >
-                                                {seg.isGenerating ? 'Generating...' : 'Generate Clip'}
+                                                Generate Clip
                                             </NeonButton>
                                             {!canGenerate && (
                                                 <p className="text-[10px] text-gray-500 text-center px-2">
-                                                    Waiting for Previous Clip
+                                                    {needsPrevious && idx > 0 && segments[idx-1].videoOptions && !segments[idx-1].videoUrl
+                                                        ? 'Select previous clip option'
+                                                        : 'Waiting for Previous Clip'}
                                                 </p>
                                             )}
+                                        </>
+                                    ) : (!seg.videoUrl && seg.videoOptions) ? (
+                                        <>
+                                            <div className="w-12 h-12 rounded-full bg-yellow-900/20 border border-yellow-700/50 flex items-center justify-center animate-pulse">
+                                                <span className="text-xl text-yellow-500">👉</span>
+                                            </div>
+                                            <span className="text-[11px] text-yellow-500 font-bold text-center px-2">
+                                                Choose Option
+                                            </span>
+                                            <button
+                                                onClick={() => handleGenerateSegment(idx)}
+                                                className="text-[10px] text-gray-500 hover:text-google-blue underline mt-1"
+                                            >
+                                                Regenerate Options
+                                            </button>
                                         </>
                                     ) : (
                                         <>
                                              <div className="w-12 h-12 rounded-full bg-green-900/30 border border-green-700 flex items-center justify-center">
                                                 <span className="text-xl text-green-400">✅</span>
-                                            </div>
-                                            <button 
-                                                onClick={() => handleGenerateSegment(idx)}
-                                                className="text-xs text-gray-400 hover:text-google-blue underline"
-                                                disabled={seg.isGenerating}
-                                            >
-                                                {seg.isGenerating ? 'Regenerating...' : 'Regenerate'}
-                                            </button>
+                                             </div>
+                                             <button
+                                                 onClick={() => handleGenerateSegment(idx)}
+                                                 className="text-xs text-gray-400 hover:text-google-blue underline"
+                                                 disabled={seg.isGenerating}
+                                             >
+                                                 Regenerate
+                                             </button>
                                         </>
                                     )}
                                 </div>
 
                                 {/* Right: Preview */}
                                 <div className="lg:col-span-5 bg-black relative flex items-center justify-center min-h-[250px]">
-                                    {seg.videoUrl ? (
-                                        <video 
-                                            src={seg.videoUrl} 
-                                            controls 
+                                    {seg.videoOptions && seg.videoOptions.length === 2 ? (
+                                        <div className="w-full h-full p-2 grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-[350px] overflow-y-auto">
+                                            {[0, 1].map(oIdx => {
+                                                const optUrl = seg.videoOptions![oIdx];
+                                                const isSelected = seg.selectedOptionIndex === oIdx;
+                                                return (
+                                                    <div
+                                                        key={oIdx}
+                                                        onClick={() => selectSegmentOption(idx, oIdx)}
+                                                        className={`cursor-pointer group relative rounded-lg overflow-hidden border-2 transition-all bg-[#151515] flex flex-col justify-between ${
+                                                            isSelected
+                                                            ? 'border-google-green ring-2 ring-google-green/30'
+                                                            : 'border-gray-800 hover:border-gray-600'
+                                                        }`}
+                                                    >
+                                                        <video
+                                                            src={optUrl}
+                                                            controls
+                                                            className="w-full object-contain aspect-video"
+                                                        />
+                                                        <div className={`p-1.5 text-[10px] font-bold text-center transition-colors uppercase ${
+                                                            isSelected ? 'bg-google-green text-gray-900' : 'bg-black/40 text-gray-400 group-hover:text-white'
+                                                        }`}>
+                                                            {isSelected ? '✓ Chosen Option ' + (oIdx + 1) : 'Use Option ' + (oIdx + 1)}
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })}
+                                        </div>
+                                    ) : seg.videoUrl ? (
+                                        <video
+                                            src={seg.videoUrl}
+                                            controls
                                             className="w-full h-full object-contain max-h-[300px]"
                                         />
                                     ) : (

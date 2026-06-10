@@ -1,32 +1,53 @@
 
-import { GameInfo, AvatarConfig } from "../types";
+import { GameInfo, AvatarConfig, DialoguePacking } from "../types";
 
 // --- SHARED CONSTANTS ---
 const BASE_PERSONA = `
-You are a top-tier, high-energy gaming livestreamer (Streamer). 
+You are a top-tier, high-energy gaming livestreamer (Streamer).
 You speak naturally, use gamer slang appropriately (but not cringey), and know how to retain viewers.
 Your vibe is professional yet hype. You are NOT a generic AI assistant.
+
+CRITICAL PRONOUN RULE: Always use gender-neutral pronouns ('they' or 'them') when referring to the streamer in all descriptions and prompts. Do not use 'he', 'she', 'him', 'his', or 'her'.
 `;
 
-const STREAMER_RULES = `
+const getStreamerRules = (dialoguePacking: DialoguePacking) => {
+    let wordCountText = '';
+    if (dialoguePacking === 'Slow') {
+        wordCountText = `
+   - **4s Segment**: MUST BE strictly between 8 and 10 words.
+   - **6s Segment**: MUST BE strictly between 12 and 15 words.
+   - **8s Segment**: MUST BE strictly between 17 and 20 words.`;
+    } else if (dialoguePacking === 'Fast') {
+        wordCountText = `
+   - **4s Segment**: MUST BE strictly between 12 and 14 words.
+   - **6s Segment**: MUST BE strictly between 18 and 21 words.
+   - **8s Segment**: MUST BE strictly between 23 and 26 words.`;
+    } else {
+        wordCountText = `
+   - **4s Segment**: MUST BE strictly between 10 and 13 words.
+   - **6s Segment**: MUST BE strictly between 15 and 18 words.
+   - **8s Segment**: MUST BE strictly between 20 and 23 words.`;
+    }
+
+    return `
 CRITICAL DURATION & PACING RULES:
 1. **TOTAL DURATION**: The sum of all segment durations MUST roughly match the length of the uploaded video.
 2. **ROUNDING**: If the total video duration has milliseconds (e.g., 29.3s or 29.8s), ROUND UP the total target script duration to the nearest second (e.g., 30s) to ensure full coverage.
 3. **SEGMENTATION**: Break the script into chunks of exactly **4, 6, or 8** seconds.
-4. **WORD COUNT LIMITS** (Strict Pacing):
-   - **4s Segment**: LESS THAN 20 words. (Short reactions only).
-   - **6s Segment**: LESS THAN 25 words.
-   - **8s Segment**: LESS THAN 30 words.
+4. **STRICT WORD COUNT LIMITS**: The generated dialogue for each segment must strictly adhere to the following word count rules based on its duration (pacing is set to '${dialoguePacking}'):
+${wordCountText}
+   - Count the words in your generated 'dialogue' for each segment and ensure they fall exactly within these ranges. Do not exceed the maximum or fall below the minimum.
+   - EXCLUDE TONALITY DESCRIPTORS: Any vocal effects or tone descriptions written in brackets or parentheses (e.g., "[ASMR whisper]", "[Excited and cheery]") MUST NOT be counted towards the word count. Only count the actual spoken words.
 5. **TIMESTAMPS**: You must calculate the cumulative timestamp for each segment (e.g., "00:00", "00:06").
 
 VISUAL DESCRIPTION RULES (CRITICAL FOR VEO):
 1. **STREAMER ACTION**: Must be EXTREMELY DETAILED (Micro-Expression Level).
    - Describe specific facial features: "Eyes wide open," "Jaw dropped," "Bit lip," "Eyebrows furrowed."
    - Describe body language: "Leans forward aggressively," "Throws head back," "Covers mouth."
-   
-2. **PURE HUMAN ACTION (NO GAME ELEMENTS)**: 
-   - The [Streamer Action] description must be 100% about the human. 
-   - **NEVER** mention what is on the screen (e.g. DO NOT say "Reacts to explosion", "Looking at the dragon"). 
+
+2. **PURE HUMAN ACTION (NO GAME ELEMENTS)**:
+   - The [Streamer Action] description must be 100% about the human.
+   - **NEVER** mention what is on the screen (e.g. DO NOT say "Reacts to explosion", "Looking at the dragon").
    - Instead use physical descriptions: "Reacts with shock", "Staring intensely at screen", "Wincing in pain".
 
 DIALOGUE & AUDIO RULES:
@@ -35,66 +56,97 @@ DIALOGUE & AUDIO RULES:
    - Example: Streamer Dialogue: "[Shouting loudly] No way! No way!"
    - This allows the video generation model to produce the correct audio style.
 
+FORMATTING RULES:
+1. Refer to the character as 'Streamer'. Use gender-neutral pronouns ('they'/'them') when referring to the streamer. Do not use 'he' or 'she'.
+
 NEGATIVE CONSTRAINTS (DO NOT INCLUDE):
 1. DO NOT describe the streamer turning the phone/screen towards the camera/viewers.
 2. DO NOT mention music, singing, or dancing.
 3. DO NOT describe actions associated with music (e.g. "nodding head to beat").
+4. DO NOT describe any camera movements, zoom, panning, tilting, tracking, or scene transitions. The camera perspective must remain completely static (locked tripod shot).
 `;
+};
 
 // --- SCRIPT GENERATION ---
 export const constructGeneratorPrompt = (info: GameInfo): string => {
-  let deviceInstruction = '';
-  if (info.gamingDevice === 'Mobile (Vertical)') {
-      deviceInstruction = `EVERY 'prompt' MUST START WITH: "Streamer holds phone VERTICALLY (Portrait) with both hands." followed by the action. Thumbs tapping/swiping.`;
-  } else if (info.gamingDevice === 'Mobile (Horizontal)') {
-      deviceInstruction = `EVERY 'prompt' MUST START WITH: "Streamer holds phone HORIZONTALLY (Landscape) with both hands." followed by the action. Thumbs tapping.`;
-  } else if (info.gamingDevice === 'PC') {
-      deviceInstruction = `Ensure descriptions involve keyboard/mouse interaction on a desk.`;
-  } else if (info.gamingDevice === 'Console') {
-      deviceInstruction = `Ensure descriptions involve holding a standard Gamepad/Controller.`;
-  }
+    let deviceInstruction = '';
+    if (info.gamingDevice === 'Mobile (Vertical)') {
+        deviceInstruction = `EVERY 'prompt' MUST START WITH: "Streamer holds phone VERTICALLY (Portrait) with both hands." followed by the action. Thumbs tapping/swiping.`;
+    } else if (info.gamingDevice === 'Mobile (Horizontal)') {
+        deviceInstruction = `EVERY 'prompt' MUST START WITH: "Streamer holds phone HORIZONTALLY (Landscape) with both hands." followed by the action. Thumbs tapping.`;
+    } else if (info.gamingDevice === 'PC') {
+        deviceInstruction = `Ensure descriptions involve keyboard/mouse interaction on a desk.`;
+    } else if (info.gamingDevice === 'Console') {
+        deviceInstruction = `Ensure descriptions involve holding a standard Gamepad/Controller.`;
+    } else if (info.gamingDevice === 'Hands-free (No device)') {
+        deviceInstruction = `Ensure descriptions do NOT involve any interactions with devices (no phones, no controllers, no keyboards). Streamer is completely hands-free.`;
+    }
 
-  return `
+    const groundingInstruction = info.searchGrounding && info.url
+        ? `3. **GOOGLE SEARCH GROUNDING ACTIVE**: You have Google Search grounding enabled for the official Game URL: "${info.url}". Use the Google Search tool to look up details, features, launch dates, unique mechanics, platforms, pricing, or target audience for "${info.title}". You have the context and liberty to incorporate these researched facts to promote the game and sound like an authentic fan/expert, aligning your promotion naturally with the gameplay visuals.`
+        : `3. **NO SEARCH GROUNDING**: Do NOT use Google Search grounding. Restrict the streamer's commentary strictly to what is directly visible in the gameplay footage. Do not make up features or facts about the game that are not visible.`;
+
+    const videoInstruction = info.videoFile
+        ? `4. **VIDEO SYNCHRONIZATION**: You have been provided with the gameplay video file. You MUST analyze the video to identify key events, actions, milestones, combat status, victories, or failures occurring at each timestamp. Your commentary [Streamer Dialogue] and physical reactions [Streamer Action] MUST synchronize directly and logically with these specific gameplay visuals in the video.`
+        : '';
+
+    const titleInstruction = `5. **GAME TITLE INTRO**: The streamer should naturally mention the Game Title ("${info.title}") in the first shot/segment of the script to introduce the game.`;
+    const ctaInstruction = `6. **CALL TO ACTION (CTA) PLACEMENT**: The streamer **MUST** naturally deliver the Call to Action ("${info.cta}") in the final shot/segment of the script as a closing remark.`;
+    const userInstructionRule = info.additionalInstructions
+        ? `7. **USER INSTRUCTIONS ADHERENCE**: You must strictly follow and incorporate the specific instructions regarding the streamer's tone, messaging, gaming style, persona, or any specific features/actions mentioned in the User Instructions: "${info.additionalInstructions}".`
+        : '';
+
+    return `
 ${BASE_PERSONA}
 
 TASK: Create a synchronized gameplay commentary script.
 
 PROJECT CONTEXT:
 - Game: "${info.title}"
-- URL: "${info.url}"
 - CTA: "${info.cta}"
 - User Instructions (Style/Tone/Messaging/Streamer Persona/Additional notes): "${info.additionalInstructions}"
 - **Gaming Device (Selected by User)**: "${info.gamingDevice}"
 
 CRITICAL INSTRUCTION:
-1. **DEVICE AUTHENTICITY**: The user has explicitly selected **${info.gamingDevice}** as the platform. 
+1. **DEVICE AUTHENTICITY**: The user has explicitly selected **${info.gamingDevice}** as the platform.
    - ${deviceInstruction}
-2. **RESEARCH**: Use the **Game URL** to identify unique features, mechanics, or selling points of the game. Incorporate these specific details into the [Streamer Dialogue] to make the commentary authentic and knowledgeable.
-3. If 'User Instructions' imply a specific voice style (ASMR, Screaming, etc), apply it to the [Streamer Dialogue] in brackets.
+2. If 'User Instructions' imply a specific voice style (ASMR, Screaming, etc), apply it to the [Streamer Dialogue] in brackets.
+${groundingInstruction}
+${videoInstruction}
+${titleInstruction}
+${ctaInstruction}
+${userInstructionRule}
 
-${STREAMER_RULES}
+${getStreamerRules(info.dialoguePacking)}
 `;
 };
 
 // --- AVATAR GENERATION ---
 export const constructAvatarPrompt = (config: AvatarConfig): string => {
-  const hasRef = !!config.referenceImage;
-  
-  let deviceInstruction = '';
-  if (config.gamingDevice) {
-      if (config.gamingDevice === 'Mobile (Vertical)') {
-          deviceInstruction = `\n- Action: Streamer is holding and playing a mobile phone vertically (portrait mode). Only back of phone is visible`;
-      } else if (config.gamingDevice === 'Mobile (Horizontal)') {
-          deviceInstruction = `\n- Action: Streamer is holding and playing a mobile phone horizontally (landscape mode). Only back of phone is visible`;
-      } else if (config.gamingDevice === 'PC') {
-          deviceInstruction = `\n- Action: Streamer is using a keyboard and mouse.`;
-      } else if (config.gamingDevice === 'Console') {
-          deviceInstruction = `\n- Action: Streamer is holding and playing with a game controller.`;
-      }
-  }
+    const hasRef = !!config.referenceImage;
 
-  return `
-Generate ${hasRef ? "an" : "a photorealistic"} image of a live streamer. 
+    let deviceInstruction = '';
+    let gazeInstruction = `- Gaze: Streamer is looking slightly DOWN (at the monitor/phone), NOT directly into the lens.`;
+    let negativeExtra = '';
+
+    if (config.gamingDevice) {
+        if (config.gamingDevice === 'Mobile (Vertical)') {
+            deviceInstruction = `\n- Action: Streamer is holding and playing a mobile phone vertically (portrait mode). Only back of phone is visible`;
+        } else if (config.gamingDevice === 'Mobile (Horizontal)') {
+            deviceInstruction = `\n- Action: Streamer is holding and playing a mobile phone horizontally (landscape mode). Only back of phone is visible`;
+        } else if (config.gamingDevice === 'PC') {
+            deviceInstruction = `\n- Action: Streamer is using a keyboard and mouse on a desk.`;
+        } else if (config.gamingDevice === 'Console') {
+            deviceInstruction = `\n- Action: Streamer is holding and playing with a game controller.`;
+        } else if (config.gamingDevice === 'Hands-free (No device)') {
+            deviceInstruction = `\n- Action: Streamer is completely hands-free. Arms are visible but NOT holding or interacting with any devices. There should be NO device, monitor, or hardware in between them and the camera.`;
+            gazeInstruction = `- Gaze: Streamer is looking DIRECTLY into the camera lens.`;
+            negativeExtra = `, keyboard, mouse, computer, PC, laptop, monitor, monitors, desktop setup, gaming PC, controller, gamepad, phone, mobile device, equipment blocking view`;
+        }
+    }
+
+    return `
+Generate ${hasRef ? "an" : "a photorealistic"} image of a live streamer.
 
 ${hasRef ? `
 CRITICAL REFERENCE ADHERENCE:
@@ -109,14 +161,14 @@ TECHNICAL SPECS:
 TECHNICAL SPECS (CAMERA):
 - Perspective: Wide-angle, direct frontal, slight overhead, shot. Looking down slightly at the streamer.
 - Framing: Close-up. Head and top of shoulders only.
-- Gaze: Streamer is looking slightly DOWN (at the monitor/phone), NOT directly into the lens.
+${gazeInstruction}
 
 SUBJECT:
 - Appearance: ${config.appearance}
 - Setting: ${config.setting} (Background must be out of focus/depth of field).${deviceInstruction}
 
 NEGATIVE PROMPT (DO NOT INCLUDE):
-- Text, overlays, UI, HUDs, watermarks, microphones covering the face, headphones covering the eyes.
+- Text, overlays, UI, HUDs, watermarks, microphones covering the face, headphones covering the eyes${negativeExtra}.
 `;
 };
 
@@ -155,34 +207,57 @@ Example output format:
 export const constructVeoGenerationPrompt = (
     visualPrompt: string,
     dialogue: string,
-    durationSeconds: number
+    durationSeconds: number,
+    gamingDevice?: string
 ): string => {
     const hasDialogue = dialogue && dialogue.trim().length > 0;
-    
+
     // Audio instruction
     // Veo 3.1 can interpret bracketed instructions in the dialogue string itself.
-    const audioPrompt = hasDialogue 
+    const audioPrompt = hasDialogue
         ? `Streamer says: "${dialogue}". Lip sync matches speech.`
         : `Streamer is silent. Mouth closed.`;
+
+    let deviceNegatives = '';
+    let deviceStablity = '';
+    let gazeVideoInstruction = '3. STREAMER GAZE: Eyes stay focused on the monitor/mobile phone (below camera).';
+
+    if (gamingDevice === 'Hands-free (No device)') {
+        deviceNegatives = ' No controllers. No keyboard. No mouse. No PC. No laptop. No monitor. No monitors. No desktop setup. No gaming PC. No phone. Streamer hands are completely empty and free. No equipment blocking view.';
+        deviceStablity = '8. HANDS FREE: STREAMER DOES NOT HOLD OR TOUCH ANY DEVICE. NO DEVICES BETWEEN STREAMER AND CAMERA.';
+        gazeVideoInstruction = '3. STREAMER GAZE: Streamer looks DIRECTLY into the camera lens.';
+    } else if (gamingDevice === 'PC') {
+        deviceNegatives = ' No controllers, no gamepad, no mobile phones, no handheld devices.';
+        deviceStablity = '8. PC GAMEPLAY: Streamer interacts with a keyboard and mouse on a desk. They do not hold any game controllers or phones.';
+    } else if (gamingDevice === 'Console') {
+        deviceNegatives = ' No mobile phones, no keyboard, no mouse, no desk blocking the view.';
+        deviceStablity = '8. CONSOLE GAMEPLAY: Streamer holds a standard game controller (gamepad) with both hands.';
+    } else if (gamingDevice === 'Mobile (Vertical)') {
+        deviceNegatives = ' No game controllers, no keyboards, no mouse.';
+        deviceStablity = '8. MOBILE VERTICAL: Streamer holds phone VERTICALLY (Portrait) with both hands. Phone orientation is fixed. No device rotation.';
+    } else if (gamingDevice === 'Mobile (Horizontal)') {
+        deviceNegatives = ' No game controllers, no keyboards, no mouse.';
+        deviceStablity = '8. MOBILE HORIZONTAL: Streamer holds phone HORIZONTALLY (Landscape) with both hands. Phone orientation is fixed. No device rotation.';
+    }
 
     return `
     IMAGE-TO-VIDEO GENERATION.
 
     STRICT TECHNICAL CONSTRAINTS (MUST FOLLOW):
-    1. CAMERA: **TRIPOD SHOT**. LOCKED OFF. ABSOLUTELY NO CAMERA MOVEMENT. NO ZOOM. NO PAN.
+    1. CAMERA: **TRIPOD SHOT**. LOCKED OFF. ABSOLUTELY NO CAMERA MOVEMENT. NO ZOOM. NO PAN. NO TILT.
     2. SHOT CONTINUITY: Single continuous take. No cuts.
-    3. STREAMER GAZE: Eyes stay focused on the monitor/mobile phone (below camera).
-    4. OVERLAYS: No text, no subtitles, no UI.
-    5. AUDIO: ${hasDialogue ? 'Speech only.' : 'Silence.'} NO MUSIC. NO SFX.
-    6. DURATION: Exactly ${durationSeconds} seconds.
-    7. NEGATIVE PROMPT: No gameplay footage. No video game UI. No HUD. No CGI characters next to streamer. No music. No SFX. No camera movements. No scene cuts. No graphics or animations.
-    8. [IF APPLICABLE] GAMING PHONE STABILITY: STREAMER DOES NOT ROTATE THE PHONE THAT THEY ARE HOLDING. DEVICE ORIENTATION IS FIXED AT ALL TIMES
+    ${gazeVideoInstruction}
+    3. OVERLAYS: No text, no subtitles, no UI.
+    4. AUDIO: ${hasDialogue ? 'Speech only.' : 'Silence.'} NO MUSIC. NO SFX.
+    5. DURATION: Exactly ${durationSeconds} seconds.
+    6. NEGATIVE PROMPT: No gameplay footage. No video game UI. No HUD. No CGI characters next to streamer. No music. No SFX. No camera movements. No scene cuts. No graphics or animations. No camera zoom, no camera panning, no camera tilting, no dolly shots, no crane shots, no tracking shots, no focus pulls.${deviceNegatives}
+    ${deviceStablity}
 
     SUBJECT:
     Gaming Streamer. ${visualPrompt}
-    
+
     DIALOGUE:
     ${audioPrompt}
- 
+
     `;
 };

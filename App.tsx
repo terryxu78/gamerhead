@@ -30,9 +30,11 @@ const GameHeads: React.FC<{ onReset: () => void; currentUser: GoogleUser | null;
   const [form, setForm] = useState<GameInfo>({
     title: '',
     url: '',
+    searchGrounding: false,
     cta: '',
     videoFile: null,
     gamingDevice: 'PC', // Default
+    dialoguePacking: 'Normal', // Default
     additionalInstructions: '',
     targetAspectRatio: '16:9', // Default
     layoutType: 'classic-pip', // Default
@@ -71,47 +73,61 @@ const GameHeads: React.FC<{ onReset: () => void; currentUser: GoogleUser | null;
     onReset();
   };
 
+  // Monitor avatar image changes to clear generated video clips from studio
+  useEffect(() => {
+    if (segments.length > 0) {
+      setSegments(prev => prev.map(seg => ({
+        ...seg,
+        videoUrl: undefined,
+        videoOptions: undefined,
+        selectedOptionIndex: undefined,
+        generatedUsingPrevUrl: undefined
+      })));
+    }
+  }, [generatedAvatarImage]);
+
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
+    if (form[name] === value) return;
+
     setForm(prev => ({ ...prev, [name]: value }));
-    
-    if (result) {
-        setResult(null);
-        setSegments([]);
-        setScriptHistory([]);
-        setHistoryIndex(-1);
-    }
+
+    setResult(null);
+    setSegments([]);
+    setScriptHistory([]);
+    setHistoryIndex(-1);
+    setActiveTab('script');
   };
 
   const setFieldValue = (name: keyof GameInfo, value: any) => {
+      if (form[name] === value) return;
+
       setForm(prev => {
-          if (prev[name] === value) return prev;
           const newState = { ...prev, [name]: value };
-          
+
           if ((name === 'layoutType' || name === 'targetAspectRatio') && generatedAvatarImage) {
               const newLayout = name === 'layoutType' ? value : prev.layoutType;
               const newRatio = name === 'targetAspectRatio' ? value : prev.targetAspectRatio;
-              
+
               let requiredAvatarRatio: TargetAspectRatio = '16:9';
               if (newLayout === 'classic-pip' || newLayout === 'streamer-only') {
                   requiredAvatarRatio = newRatio;
               } else if (newLayout === 'stacked') {
                   requiredAvatarRatio = newRatio === '16:9' ? '9:16' : '16:9';
               }
-              
+
               setShowInvalidationAlert("Layout changed. Please regenerate your avatar to match the new format. Existing shot list is preserved, but clips must be regenerated.");
-              setGeneratedAvatarImage(null); 
+              setGeneratedAvatarImage(null);
               setAvatarConfig(prevConfig => ({ ...prevConfig, aspectRatio: requiredAvatarRatio }));
-              
-              setSegments(prevSegments => prevSegments.map(s => ({
-                  ...s,
-                  videoUrl: undefined,
-                  isGenerating: false,
-                  generatedAt: undefined
-              })));
           }
           return newState;
       });
+
+      setResult(null);
+      setSegments([]);
+      setScriptHistory([]);
+      setHistoryIndex(-1);
+      setActiveTab('script');
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -124,12 +140,11 @@ const GameHeads: React.FC<{ onReset: () => void; currentUser: GoogleUser | null;
       setForm(prev => ({ ...prev, videoFile: file }));
       setCachedVideo(null);
 
-      if (result) {
-          setResult(null);
-          setSegments([]);
-          setScriptHistory([]);
-          setHistoryIndex(-1);
-      }
+      setResult(null);
+      setSegments([]);
+      setScriptHistory([]);
+      setHistoryIndex(-1);
+      setActiveTab('script');
     }
   };
 
@@ -144,7 +159,11 @@ const GameHeads: React.FC<{ onReset: () => void; currentUser: GoogleUser | null;
   }, [form.layoutType, form.targetAspectRatio]);
 
   const isFormValid = useMemo(() => {
-      return !!(form.title && form.url && form.cta && form.videoFile);
+      const basicValid = !!(form.title && form.cta && form.videoFile);
+      if (form.searchGrounding) {
+          return basicValid && !!form.url;
+      }
+      return basicValid;
   }, [form]);
 
   const isStudioUnlocked = isFormValid && !!generatedAvatarImage;
@@ -152,7 +171,7 @@ const GameHeads: React.FC<{ onReset: () => void; currentUser: GoogleUser | null;
   const handleGenerateScript = async () => {
     const errors = [];
     if (!form.title) errors.push("Game Title");
-    if (!form.url) errors.push("Game Link");
+    if (form.searchGrounding && !form.url) errors.push("Game URL");
     if (!form.cta) errors.push("Call to Action");
     if (!form.videoFile) errors.push("Video File");
 
@@ -272,9 +291,10 @@ const GameHeads: React.FC<{ onReset: () => void; currentUser: GoogleUser | null;
                         <span className="text-4xl transition-transform group-hover:scale-110 duration-300 block filter drop-shadow-sm">👾</span>
                         <span className="absolute -bottom-1 -right-1 text-lg">🎧</span>
                     </div>
-                    <h1 className="text-3xl font-black tracking-tight text-white">
+                    <h1 className="text-3xl font-black tracking-tight text-white flex items-baseline gap-1.5">
                         <span className="bg-clip-text text-transparent bg-gradient-to-r from-google-blue to-google-green">Gamer</span>
                         <span className="text-white">Heads</span>
+                        <span className="text-[10px] text-gray-500 font-bold ml-1 align-baseline uppercase tracking-wider">v1.5</span>
                     </h1>
                     </div>
                     <p className="text-xs sm:text-sm text-gray-400 font-medium mt-1 text-center md:text-left hidden sm:block">
@@ -435,6 +455,7 @@ const GameHeads: React.FC<{ onReset: () => void; currentUser: GoogleUser | null;
                             isLoading={isLoading}
                             statusMessage={statusMessage}
                             externalError={error}
+                            gamingDevice={form.gamingDevice}
                         />
                     ) : (
                         <div className="h-full flex flex-col items-center justify-center text-center p-12 bg-google-surface rounded-3xl border border-gray-700 shadow-card">
