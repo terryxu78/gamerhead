@@ -2,9 +2,10 @@
 import React, { useState, useRef, useCallback } from 'react';
 import NeonButton from './NeonButton';
 import { ScriptResult, AvatarConfig, VeoSegment, LayoutType, TargetAspectRatio, PipPlacement, StackedPlacement } from '../types';
-import { generateVeoClip, stitchClipsServer } from '../services/gemini';
+import { generateVeoClip, stitchClipsServer, burnSubtitlesServer } from '../services/gemini';
 import { compositePipVideo } from '../utils/videoUtils';
 import { logEvent } from '../services/logging';
+import { buildFallbackSrt } from '../utils/subtitles';
 
 interface StudioProps {
   scriptResult: ScriptResult | null;
@@ -61,6 +62,9 @@ const Studio: React.FC<StudioProps> = ({
 
   // Generation Mode Selection (Single vs 2 Options)
   const [genMode, setGenMode] = useState<'single' | 'options'>('single');
+
+  // Burn subtitles on export (built from script dialogue)
+  const [burnSubtitles, setBurnSubtitles] = useState(false);
 
   const handleDownloadScript = () => {
       if (!scriptResult) return;
@@ -309,21 +313,27 @@ const Studio: React.FC<StudioProps> = ({
   };
 
   // --- Export Handlers ---
+  const subtitleLogMeta = () => ({ subtitles: burnSubtitles ? 'on' : 'off' });
+
   const handleDownloadStreamerOnly = async () => {
     if (finalBlobs.length === 0) return;
     setIsProcessingExport(true);
     setExportProgress("Stitching clips together...");
     
     try {
-        // Force high quality (1080p, 10Mbps)
-        const stitchedBlob = await stitchClipsServer(finalBlobs, setExportProgress);
+        const subtitleSrt = burnSubtitles ? buildFallbackSrt(segments) : undefined;
+        const stitchedBlob = await stitchClipsServer(
+            finalBlobs,
+            setExportProgress,
+            subtitleSrt,
+        );
         const ext = stitchedBlob.type.includes('mp4') ? 'mp4' : 'webm';
-        
-        // Updated filename logic
-        let filename = `Gamerheads_Streamer_${Date.now()}`;
+
+        const suffix = burnSubtitles ? '_Subtitled' : '';
+        let filename = `Gamerheads_Streamer${suffix}_${Date.now()}`;
         if (gameplayFile) {
             const originalName = gameplayFile.name.substring(0, gameplayFile.name.lastIndexOf('.')) || gameplayFile.name;
-            filename = `Gamerheads_Streamer_${originalName}_${Date.now()}`;
+            filename = `Gamerheads_Streamer_${originalName}${suffix}_${Date.now()}`;
         }
 
         const url = URL.createObjectURL(stitchedBlob);
@@ -334,13 +344,12 @@ const Studio: React.FC<StudioProps> = ({
         a.click();
         document.body.removeChild(a);
 
-        // LOGGING
-        logEvent('export', 'stitch-only', 'success', { aspectRatio: targetAspectRatio });
+        logEvent('export', 'stitch-only', 'success', { aspectRatio: targetAspectRatio, ...subtitleLogMeta() });
 
     } catch (e) {
         console.error("Export failed", e);
         setError("Failed to export streamer video.");
-        logEvent('export', 'stitch-only', 'failed', { error: String(e) });
+        logEvent('export', 'stitch-only', 'failed', { error: String(e), ...subtitleLogMeta() });
     } finally {
         setIsProcessingExport(false);
         setExportProgress(null);
@@ -362,40 +371,53 @@ const Studio: React.FC<StudioProps> = ({
       }
 
       setIsProcessingExport(true);
-      setExportProgress("Compositing Video (This may take a minute)...");
-      
+      setExportProgress("Preparing streamer track & composite in parallel...");
+
+      const wantsSubtitles = burnSubtitles;
+      const stitchStreamerPromise = stitchClipsServer(finalBlobs);
+
       try {
-          const stitchedStreamerBlob = await stitchClipsServer(finalBlobs, setExportProgress);
+          const stitchedStreamerBlob = await stitchStreamerPromise;
           const stitchedStreamerUrl = URL.createObjectURL(stitchedStreamerBlob);
-          
-          const finalBlob = await compositePipVideo(
-              gameplayFile, 
-              stitchedStreamerUrl, 
+
+          setExportProgress("Compositing streamer over gameplay (keep this tab active)...");
+          const compositeBlob = await compositePipVideo(
+              gameplayFile,
+              stitchedStreamerUrl,
               audioVolumes,
               layoutType,
               targetAspectRatio,
               pipPlacement,
-              stackedPlacement
+              stackedPlacement,
           );
-          const ext = finalBlob.type.includes('mp4') ? 'mp4' : 'webm';
+          URL.revokeObjectURL(stitchedStreamerUrl);
 
+          let finalBlob = compositeBlob;
+
+          if (wantsSubtitles) {
+              const srt = buildFallbackSrt(segments);
+              if (srt.trim()) {
+                  finalBlob = await burnSubtitlesServer(compositeBlob, srt, setExportProgress);
+              }
+          }
+
+          const ext = finalBlob.type.includes('mp4') ? 'mp4' : 'webm';
           const originalName = gameplayFile.name.substring(0, gameplayFile.name.lastIndexOf('.')) || gameplayFile.name;
+          const suffix = wantsSubtitles ? '_Subtitled' : '';
           const url = URL.createObjectURL(finalBlob);
           const a = document.createElement('a');
           a.href = url;
-          // Ensure GamerHeads_ prefix for mix
-          a.download = `GamerHeads_${originalName}_Mix_${Date.now()}.${ext}`;
+          a.download = `GamerHeads_${originalName}_Mix${suffix}_${Date.now()}.${ext}`;
           document.body.appendChild(a);
           a.click();
           document.body.removeChild(a);
 
-          // LOGGING
-          logEvent('export', 'composite', 'success', { aspectRatio: targetAspectRatio, layout: layoutType });
+          logEvent('export', 'composite', 'success', { aspectRatio: targetAspectRatio, layout: layoutType, ...subtitleLogMeta() });
 
       } catch (e) {
           console.error("Full export failed", e);
           setError("Failed to create final composite video.");
-          logEvent('export', 'composite', 'failed', { error: String(e) });
+          logEvent('export', 'composite', 'failed', { error: String(e), ...subtitleLogMeta() });
       } finally {
           setIsProcessingExport(false);
           setExportProgress(null);
@@ -888,6 +910,24 @@ const Studio: React.FC<StudioProps> = ({
                         </div>
                     </div>
                 )}
+
+                {/* Subtitle toggle */}
+                <div className="mb-4 flex flex-col items-center gap-1">
+                    <label className="flex items-center gap-2 text-sm text-gray-200 cursor-pointer select-none">
+                        <input
+                            type="checkbox"
+                            checked={burnSubtitles}
+                            onChange={(e) => setBurnSubtitles(e.target.checked)}
+                            disabled={isProcessingExport}
+                            className="w-4 h-4 accent-google-blue cursor-pointer disabled:cursor-not-allowed"
+                        />
+                        <span>Add subtitles (from script)</span>
+                    </label>
+                    <p className="text-xs text-gray-500">
+                        Burns subtitles built from the script dialogue onto the final video —
+                        adaptive-size gaming-variety style, landing on the full frame, not the PiP window.
+                    </p>
+                </div>
 
                 {/* Buttons */}
                 <div className="flex flex-wrap gap-4 justify-center items-center">

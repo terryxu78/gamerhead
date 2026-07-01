@@ -6,7 +6,9 @@ export const getUserId = (): string => {
     
     let uid = localStorage.getItem('gameheads_uid');
     if (!uid) {
-        uid = crypto.randomUUID();
+        uid = (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function')
+            ? crypto.randomUUID()
+            : `uid-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
         localStorage.setItem('gameheads_uid', uid);
     }
     return uid;

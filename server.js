@@ -7,6 +7,7 @@ import { mkdtemp, writeFile, rm } from 'fs/promises';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import os from 'os';
+import { randomUUID } from 'crypto';
 import { createRequire } from 'module';
 import { Datastore } from '@google-cloud/datastore';
 import { Storage } from '@google-cloud/storage';
@@ -879,18 +880,149 @@ apiRouter.get('/gemini/download-video', async (req, res) => {
 });
 
 // POST /api/gemini/stitch-clips
-// Body: multipart/form-data, field "clips" (multiple video files)
-// Returns: video/mp4 stream, or JSON { url } if GCS bucket is configured
+// Body: multipart/form-data
+//   - clips: video files (one or more)
+//   - subtitleSrt: SRT text (optional) — if present, burned into the stitched video
+// Returns: video/mp4 stream.
 const upload = multer({
     storage: multer.memoryStorage(),
     limits: { fileSize: 200 * 1024 * 1024 } // 200MB per file
 });
 
-apiRouter.post('/gemini/stitch-clips', upload.array('clips'), async (req, res) => {
-    const files = req.files;
-    if (!files || files.length === 0) {
+const escapeSubtitleFilterPath = (p) => p.replace(/\\/g, '/').replace(/'/g, "\\'").replace(/:/g, '\\:');
+
+// Parse SRT timestamps (HH:MM:SS,mmm) into ASS timestamps (H:MM:SS.cc).
+const srtTimeToAss = (t) => {
+    const m = t.trim().match(/^(\d{1,2}):(\d{2}):(\d{2})[,.](\d{1,3})$/);
+    if (!m) return '0:00:00.00';
+    const [, h, mm, ss, ms] = m;
+    const cs = Math.round(parseInt(ms.padEnd(3, '0'), 10) / 10);
+    return `${parseInt(h, 10)}:${mm}:${ss}.${String(cs).padStart(2, '0')}`;
+};
+
+// Convert SRT text to ASS dialogue lines. Uses \N for line breaks.
+const srtToAssDialogues = (srt) => {
+    const blocks = srt.replace(/\r\n/g, '\n').split(/\n{2,}/);
+    const lines = [];
+    for (const block of blocks) {
+        const parts = block.trim().split('\n');
+        if (parts.length < 2) continue;
+        const timeLine = parts.find(l => l.includes('-->'));
+        if (!timeLine) continue;
+        const timeIdx = parts.indexOf(timeLine);
+        const [startRaw, endRaw] = timeLine.split('-->').map(s => s.trim());
+        const text = parts.slice(timeIdx + 1).join('\\N').replace(/\{/g, '\\{').replace(/\}/g, '\\}');
+        if (!text.trim()) continue;
+        lines.push(`Dialogue: 0,${srtTimeToAss(startRaw)},${srtTimeToAss(endRaw)},Default,,0,0,0,,${text}`);
+    }
+    return lines.join('\n');
+};
+
+/**
+ * Build a complete ASS subtitle file with the video's real dimensions as
+ * PlayResX/Y. This bypasses the SRT→ASS conversion inside libass that would
+ * otherwise use PlayResY=288 and blow up our pixel-sized FontSize.
+ *
+ * Rules of thumb for streaming-variety look, all in pixels:
+ *   fontSize = ~4.2% of height (clamped 26..64)
+ *   outline  = ~10% of fontSize (min 3)
+ *   shadow   = ~6% of fontSize  (min 2)
+ *   marginV  = ~7% of height    (min 40)
+ */
+const buildAssFromSrt = (srt, dimensions) => {
+    const width = dimensions?.width || 1920;
+    const height = dimensions?.height || 1080;
+    const fontSize = Math.max(26, Math.min(64, Math.round(height * 0.042)));
+    const outline = Math.max(3, Math.round(fontSize * 0.10));
+    const shadow = Math.max(2, Math.round(fontSize * 0.06));
+    const marginV = Math.max(40, Math.round(height * 0.07));
+
+    const styleLine = `Style: Default,Arial,${fontSize},&H00FFFFFF,&H000000FF,` +
+        `&H00000000,&H80000000,1,0,0,0,100,100,0.4,0,1,${outline},${shadow},` +
+        `2,80,80,${marginV},1`;
+
+    return `[Script Info]
+ScriptType: v4.00+
+PlayResX: ${width}
+PlayResY: ${height}
+ScaledBorderAndShadow: yes
+WrapStyle: 0
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+${styleLine}
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+${srtToAssDialogues(srt)}
+`;
+};
+
+/**
+ * Probe a video's width/height via ffprobe.
+ * Returns { width, height } or null if the probe fails.
+ */
+const probeVideoDimensions = async (videoPath) => {
+    try {
+        const { stdout } = await execFileAsync('ffprobe', [
+            '-v', 'error',
+            '-select_streams', 'v:0',
+            '-show_entries', 'stream=width,height',
+            '-of', 'csv=p=0:s=x',
+            videoPath,
+        ]);
+        const [w, h] = stdout.trim().split('x').map(n => parseInt(n, 10));
+        if (!w || !h) return null;
+        return { width: w, height: h };
+    } catch (err) {
+        console.warn('[FFprobe] Failed to probe dimensions:', err.message);
+        return null;
+    }
+};
+
+/**
+ * Burn an SRT into a video, re-encoding once. Style adapts to the video's height.
+ * Returns the output file path.
+ *
+ * We generate an ASS file directly (rather than SRT + force_style) so we can
+ * pin PlayResX/Y to the real video dimensions. Otherwise libass converts SRT
+ * with PlayResY=288, and our pixel-scaled FontSize gets multiplied by
+ * (video_height / 288) → 3.75x at 1080p, 6.67x at 1920p, wrapping text and
+ * blowing letters off-screen.
+ */
+const burnSrtIntoVideo = async (inputPath, srt, tmpDir, outputName = 'final.mp4') => {
+    const dimensions = await probeVideoDimensions(inputPath);
+    const assContent = buildAssFromSrt(srt, dimensions);
+    const assPath = path.join(tmpDir, `subs-${randomUUID()}.ass`);
+    await writeFile(assPath, assContent, 'utf8');
+
+    console.log(`[Subtitles] Burning subtitles — dimensions=${dimensions ? `${dimensions.width}x${dimensions.height}` : 'unknown'}`);
+
+    const outputPath = path.join(tmpDir, outputName);
+    const filterArg = `ass='${escapeSubtitleFilterPath(assPath)}'`;
+    await execFileAsync('ffmpeg', [
+        '-i', inputPath,
+        '-vf', filterArg,
+        '-c:v', 'libx264',
+        '-preset', 'veryfast',
+        '-crf', '20',
+        '-c:a', 'copy',
+        '-movflags', '+faststart',
+        '-y',
+        outputPath,
+    ]);
+    return outputPath;
+};
+
+apiRouter.post('/gemini/stitch-clips', upload.any(), async (req, res) => {
+    const files = (req.files || []).filter(f => f.fieldname === 'clips');
+    if (files.length === 0) {
         return res.status(400).json({ error: 'No clip files provided' });
     }
+
+    const subtitleSrt = (req.body && typeof req.body.subtitleSrt === 'string')
+        ? req.body.subtitleSrt.trim()
+        : '';
 
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), 'stitch-'));
     try {
@@ -908,26 +1040,76 @@ apiRouter.post('/gemini/stitch-clips', upload.array('clips'), async (req, res) =
         await writeFile(fileListPath, fileListContent);
 
         // 运行 FFmpeg 无损拼接
-        const outputPath = path.join(tmpDir, 'output.mp4');
+        const concatPath = path.join(tmpDir, 'concat.mp4');
         await execFileAsync('ffmpeg', [
             '-f', 'concat',
             '-safe', '0',
             '-i', fileListPath,
             '-c', 'copy',
             '-y',
-            outputPath
+            concatPath
         ]);
 
-        console.log(`[FFmpeg] Stitched ${files.length} clips → ${outputPath}`);
+        console.log(`[FFmpeg] Stitched ${files.length} clips → ${concatPath}`);
 
-        // 直接流式返回，避免 GCS 签名 URL 的 CORS 问题
+        // 无字幕：直接流式返回
+        if (!subtitleSrt) {
+            res.setHeader('Content-Type', 'video/mp4');
+            res.setHeader('Content-Disposition', 'attachment; filename="stitched.mp4"');
+            createReadStream(concatPath).pipe(res);
+            return;
+        }
+
+        // 有字幕：按视频尺寸自适应样式，烧入字幕后再返回
+        const finalPath = await burnSrtIntoVideo(concatPath, subtitleSrt, tmpDir, 'final.mp4');
+        console.log(`[Subtitles] Burned subtitles → ${finalPath}`);
         res.setHeader('Content-Type', 'video/mp4');
-        res.setHeader('Content-Disposition', 'attachment; filename="stitched.mp4"');
-        createReadStream(outputPath).pipe(res);
+        res.setHeader('Content-Disposition', 'attachment; filename="stitched_subtitled.mp4"');
+        createReadStream(finalPath).pipe(res);
     } catch (err) {
         console.error('[FFmpeg] stitch-clips error:', err);
         if (!res.headersSent) {
             res.status(500).json({ error: 'Stitch failed: ' + err.message });
+        }
+    } finally {
+        await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    }
+});
+
+// POST /api/gemini/burn-subtitles
+// Body: multipart/form-data
+//   - video: single video file (the final composite)
+//   - srt: SRT text (form field)
+// Returns: video/mp4 stream with subtitles burned in.
+//
+// Used after the browser finishes the PiP composite: the client sends the
+// composite blob and a client-built SRT, so subtitles land on the final
+// full-frame video, not on the tiny streamer PiP.
+apiRouter.post('/gemini/burn-subtitles', upload.any(), async (req, res) => {
+    const videoFile = (req.files || []).find(f => f.fieldname === 'video');
+    if (!videoFile) {
+        return res.status(400).json({ error: 'No video file provided' });
+    }
+    const srt = (req.body && typeof req.body.srt === 'string') ? req.body.srt : '';
+    if (!srt.trim()) {
+        return res.status(400).json({ error: 'srt field is required and non-empty' });
+    }
+
+    const tmpDir = await mkdtemp(path.join(os.tmpdir(), 'burn-'));
+
+    try {
+        const ext = videoFile.mimetype && videoFile.mimetype.includes('webm') ? 'webm' : 'mp4';
+        const inputPath = path.join(tmpDir, `input.${ext}`);
+        await writeFile(inputPath, videoFile.buffer);
+
+        const finalPath = await burnSrtIntoVideo(inputPath, srt, tmpDir, 'final.mp4');
+        res.setHeader('Content-Type', 'video/mp4');
+        res.setHeader('Content-Disposition', 'attachment; filename="subtitled.mp4"');
+        createReadStream(finalPath).pipe(res);
+    } catch (err) {
+        console.error('[FFmpeg] burn-subtitles error:', err);
+        if (!res.headersSent) {
+            res.status(500).json({ error: 'Burn failed: ' + err.message });
         }
     } finally {
         await rm(tmpDir, { recursive: true, force: true }).catch(() => {});

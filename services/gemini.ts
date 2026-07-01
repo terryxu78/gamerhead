@@ -282,11 +282,13 @@ export const generateVeoClip = async (
 /**
  * Server-side video stitching via FFmpeg.
  * Uploads clip blobs to the server and concatenates them losslessly.
- * Returns the stitched video as a Blob.
+ * If `subtitleSrt` is provided, the server burns it into the stitched video
+ * (requires re-encode).
  */
 export const stitchClipsServer = async (
     clipUrls: string[],
-    onProgress?: (msg: string) => void
+    onProgress?: (msg: string) => void,
+    subtitleSrt?: string,
 ): Promise<Blob> => {
     const formData = new FormData();
 
@@ -297,7 +299,12 @@ export const stitchClipsServer = async (
         formData.append('clips', blob, `clip_${i}.mp4`);
     }
 
-    if (onProgress) onProgress('Stitching on server...');
+    if (subtitleSrt && subtitleSrt.trim()) {
+        formData.append('subtitleSrt', subtitleSrt);
+        if (onProgress) onProgress('Stitching + burning subtitles...');
+    } else {
+        if (onProgress) onProgress('Stitching on server...');
+    }
 
     const token = sessionStorage.getItem('gh_id_token');
     const res = await authFetch('/api/gemini/stitch-clips', {
@@ -311,5 +318,33 @@ export const stitchClipsServer = async (
         throw new Error(`Stitch failed: ${errText}`);
     }
 
+    return await res.blob();
+};
+
+/**
+ * Server-side subtitle burn-in on a single final video (typically the composited Mix).
+ * Uses the same adaptive style as the stitch endpoint so 16:9 and 9:16 both look right.
+ */
+export const burnSubtitlesServer = async (
+    videoBlob: Blob,
+    srt: string,
+    onProgress?: (msg: string) => void,
+): Promise<Blob> => {
+    const formData = new FormData();
+    const ext = videoBlob.type.includes('webm') ? 'webm' : 'mp4';
+    formData.append('video', videoBlob, `input.${ext}`);
+    formData.append('srt', srt);
+    if (onProgress) onProgress('Burning subtitles into final video...');
+
+    const token = sessionStorage.getItem('gh_id_token');
+    const res = await authFetch('/api/gemini/burn-subtitles', {
+        method: 'POST',
+        headers: token ? { 'Authorization': `Bearer ${token}` } : {},
+        body: formData,
+    });
+    if (!res.ok) {
+        const errText = await res.text().catch(() => res.statusText);
+        throw new Error(`Burn subtitles failed: ${errText}`);
+    }
     return res.blob();
 };

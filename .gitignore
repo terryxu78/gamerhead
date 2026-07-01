@@ -20,6 +20,12 @@ dist-ssr
 # Claude Code
 .claude/
 
+# Codegraph local index
+.codegraph/
+
+# Local subtitle preview scratch — not committed
+subtitle-preview/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

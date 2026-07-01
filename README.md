@@ -9,6 +9,7 @@
 - **AI Script Generation** — Generate video scripts using Gemini models via Vertex AI.
 - **AI Avatar / Image Generation** — Create character images using `gemini-3.1-flash-image` (or configurable model).
 - **AI Video Generation** — Generate video clips using Veo models (default: `veo-3.1-generate and veo-3.1-flash-generate`). Videos are automatically saved to a GCS bucket.
+- **Script-Subtitled Export** — Optional checkbox at export time burns SRT subtitles (built from the script dialogue) into the final video.
 - **Admin Dashboard** — Monitor usage across all users:
   - Scorecards: total generations, scripts, avatars, video clips, Gamerhead exports, H:V aspect ratio
   - Activity trend line chart (per model, per day)
