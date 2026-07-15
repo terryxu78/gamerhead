@@ -686,6 +686,7 @@ apiRouter.post('/gemini/generate-video', async (req, res) => {
             resolution: '720p',
             aspectRatio: veoRatio,
             durationSeconds: durationSeconds || 6,
+            personGeneration: 'allow_adult',
         };
         if (systemInstruction) config.systemInstruction = systemInstruction;
 
