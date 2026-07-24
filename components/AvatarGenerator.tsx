@@ -77,7 +77,7 @@ const AvatarGenerator: React.FC<AvatarGeneratorProps> = ({ externalConfig, setEx
     appearance: '',
     setting: '',
     aspectRatio: '16:9',
-    model: 'gemini-3.1-flash-image-preview'  // Vertex AI global endpoint image model
+    model: 'gemini-3.1-flash-image'  // Vertex AI global endpoint image model
   });
 
   // Use external state if provided, else local

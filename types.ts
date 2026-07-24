@@ -45,7 +45,7 @@ export interface AvatarConfig {
   setting: string;
   aspectRatio: '16:9' | '9:16';
   referenceImage?: string; // Base64 string
-  model: 'gemini-3.1-flash-image-preview';
+  model: 'gemini-3.1-flash-image';
   gamingDevice?: string;
 }
 

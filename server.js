@@ -388,7 +388,7 @@ const getVeoClient = () => {
     });
 };
 
-// Global client — required for gemini-3.1-flash-image-preview and Veo models
+// Global client — required for gemini-3.1-flash-image and Veo models
 const getVertexAIGlobalClient = () => {
     if (!GCP_PROJECT_ID) {
         throw new Error('GCP_PROJECT_ID / GOOGLE_CLOUD_PROJECT environment variable is not set.');
@@ -639,7 +639,7 @@ apiRouter.post('/gemini/generate-avatar', async (req, res) => {
         }
 
         const ai = getVertexAIGlobalClient();   // Image model requires global endpoint
-        const resolvedModel = model || 'gemini-3.1-flash-image-preview';
+        const resolvedModel = model || 'gemini-3.1-flash-image';
         console.log(`[Gemini] Avatar model: ${resolvedModel} (global endpoint)`);
         const response = await ai.models.generateContent({
             model: resolvedModel,

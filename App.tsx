@@ -46,7 +46,7 @@ const GameHeads: React.FC<{ onReset: () => void; currentUser: GoogleUser | null;
       appearance: '',
       setting: '',
       aspectRatio: '16:9',
-      model: 'gemini-3.1-flash-image-preview'  // Vertex AI global endpoint image model
+      model: 'gemini-3.1-flash-image'  // Vertex AI global endpoint image model
   });
   
   const [generatedAvatarImage, setGeneratedAvatarImage] = useState<string | null>(null);
