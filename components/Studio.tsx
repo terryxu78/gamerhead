@@ -1,14 +1,19 @@
 
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import NeonButton from './NeonButton';
-import { ScriptResult, AvatarConfig, VeoSegment, LayoutType, TargetAspectRatio, PipPlacement, StackedPlacement } from '../types';
-import { generateVeoClip, stitchClipsServer, burnSubtitlesServer } from '../services/gemini';
+import { ScriptResult, AvatarConfig, VeoSegment, LayoutType, TargetAspectRatio, PipPlacement, StackedPlacement, ExportRecord } from '../types';
+import { generateVeoClip, stitchClipsServer, burnSubtitlesServer, saveExportToGcs } from '../services/gemini';
 import { compositePipVideo } from '../utils/videoUtils';
 import { logEvent } from '../services/logging';
 import { buildFallbackSrt } from '../utils/subtitles';
 
-interface StudioProps {
-  scriptResult: ScriptResult | null;
+/**
+ * What to do with a finished render: hand the user the file, or just show it.
+ * Rendering is identical either way — only delivery differs.
+ */
+type DeliverMode = 'download' | 'preview';
+
+interface StudioProps {  scriptResult: ScriptResult | null;
   segments: VeoSegment[];
   setSegments: React.Dispatch<React.SetStateAction<VeoSegment[]>>;
   avatarImage: string | null;
@@ -23,6 +28,8 @@ interface StudioProps {
   statusMessage: string;
   externalError: string | null;
   gamingDevice?: string;
+  /** Called whenever a render is persisted to GCS, so it lands in project history. */
+  onExportSaved?: (record: ExportRecord) => void;
 }
 
 const Studio: React.FC<StudioProps> = ({
@@ -40,7 +47,8 @@ const Studio: React.FC<StudioProps> = ({
     isLoading,
     statusMessage,
     externalError,
-    gamingDevice
+    gamingDevice,
+    onExportSaved
 }) => {
   const [error, setError] = useState<string | null>(null);
   
@@ -53,6 +61,37 @@ const Studio: React.FC<StudioProps> = ({
   const [currentPlayIndex, setCurrentPlayIndex] = useState(0);
   const [isProcessingExport, setIsProcessingExport] = useState(false);
   const [exportProgress, setExportProgress] = useState<string | null>(null);
+
+  // Preview of the actual finished export (previously the file was only
+  // auto-downloaded and never shown).
+  const [exportPreview, setExportPreview] = useState<{
+      url: string;
+      fileName: string;
+      kind: 'streamer' | 'composite';
+      subtitles: boolean;
+      gcsUri?: string;
+      saveError?: string;
+      downloaded: boolean;
+  } | null>(null);
+  const [deliverMode, setDeliverMode] = useState<DeliverMode>('download');
+
+  // Revoke the preview object URL when it is replaced or the view unmounts.
+  const previewUrlRef = useRef<string | null>(null);
+  useEffect(() => {
+      previewUrlRef.current = exportPreview?.url || null;
+      return () => {
+          if (previewUrlRef.current) URL.revokeObjectURL(previewUrlRef.current);
+      };
+  }, [exportPreview?.url]);
+
+  // The player fills the viewport, so a fresh render below the fold would be
+  // easy to miss — scroll it into view.
+  const previewPanelRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+      if (exportPreview && !isProcessingExport) {
+          previewPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+  }, [exportPreview?.url, isProcessingExport]);
   
   // Audio Mix State
   const [audioVolumes, setAudioVolumes] = useState({ streamer: 1.2, gameplay: 0.3 });
@@ -127,7 +166,8 @@ const Studio: React.FC<StudioProps> = ({
               newSegs[index] = {
                   ...seg,
                   selectedOptionIndex: optionIndex,
-                  videoUrl: seg.videoOptions[optionIndex]
+                  videoUrl: seg.videoOptions[optionIndex],
+                  videoGcsUri: seg.videoOptionGcsUris?.[optionIndex]
               };
           }
           return newSegs;
@@ -219,14 +259,16 @@ const Studio: React.FC<StudioProps> = ({
                 gamingDevice
             );
 
-            const [url1, url2] = await Promise.all([p1, p2]);
+            const [res1, res2] = await Promise.all([p1, p2]);
 
             setSegments(prev => {
                 const newSegs = [...prev];
                 newSegs[index] = {
                     ...newSegs[index],
-                    videoOptions: [url1, url2],
+                    videoOptions: [res1.blobUrl, res2.blobUrl],
+                    videoOptionGcsUris: [res1.gcsUri, res2.gcsUri],
                     videoUrl: undefined, // Needs user choice
+                    videoGcsUri: undefined,
                     selectedOptionIndex: undefined,
                     generatedAt: Date.now(),
                     generatedUsingPrevUrl: prevUrl || undefined,
@@ -235,7 +277,7 @@ const Studio: React.FC<StudioProps> = ({
                 return newSegs;
             });
         } else {
-            const blobUrl = await generateVeoClip(
+            const clip = await generateVeoClip(
                 currentSegment.prompt,
                 currentSegment.dialogue,
                 startImageBase64,
@@ -250,7 +292,8 @@ const Studio: React.FC<StudioProps> = ({
                 const newSegs = [...prev];
                 newSegs[index] = {
                     ...newSegs[index],
-                    videoUrl: blobUrl,
+                    videoUrl: clip.blobUrl,
+                    videoGcsUri: clip.gcsUri,
                     generatedAt: Date.now(),
                     generatedUsingPrevUrl: prevUrl || undefined,
                     isGenerating: false
@@ -315,17 +358,68 @@ const Studio: React.FC<StudioProps> = ({
   // --- Export Handlers ---
   const subtitleLogMeta = () => ({ subtitles: burnSubtitles ? 'on' : 'off' });
 
-  const handleDownloadStreamerOnly = async () => {
+  /**
+   * Trigger the browser download. Kept alongside the new preview so the
+   * existing "click export, get a file" behaviour is unchanged.
+   */
+  const triggerDownload = (url: string, fileName: string) => {
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+  };
+
+  /** Show the finished render and record it in project history. */
+  const publishExport = (
+      blob: Blob,
+      fileName: string,
+      kind: 'streamer' | 'composite',
+      gcsUri: string | undefined,
+      saveError: string | undefined,
+      deliver: DeliverMode,
+  ) => {
+      const previewUrl = URL.createObjectURL(blob);
+      if (deliver === 'download') triggerDownload(previewUrl, fileName);
+      setExportPreview({
+          url: previewUrl,
+          fileName,
+          kind,
+          subtitles: burnSubtitles,
+          gcsUri,
+          saveError,
+          downloaded: deliver === 'download',
+      });
+
+      if (gcsUri && onExportSaved) {
+          onExportSaved({
+              gcsUri,
+              kind,
+              subtitles: burnSubtitles,
+              aspectRatio: targetAspectRatio,
+              layoutType: kind === 'composite' ? layoutType : undefined,
+              fileName,
+              createdAt: Date.now(),
+          });
+      }
+  };
+
+  const handleDownloadStreamerOnly = async (deliver: DeliverMode = 'download') => {
     if (finalBlobs.length === 0) return;
     setIsProcessingExport(true);
+    setDeliverMode(deliver);
     setExportProgress("Stitching clips together...");
     
     try {
         const subtitleSrt = burnSubtitles ? buildFallbackSrt(segments) : undefined;
-        const stitchedBlob = await stitchClipsServer(
+        // saveToGcs: the server already holds the finished file, so it uploads
+        // directly instead of making the browser send it back up.
+        const { blob: stitchedBlob, gcsUri } = await stitchClipsServer(
             finalBlobs,
             setExportProgress,
             subtitleSrt,
+            true,
         );
         const ext = stitchedBlob.type.includes('mp4') ? 'mp4' : 'webm';
 
@@ -335,16 +429,22 @@ const Studio: React.FC<StudioProps> = ({
             const originalName = gameplayFile.name.substring(0, gameplayFile.name.lastIndexOf('.')) || gameplayFile.name;
             filename = `Gamerheads_Streamer_${originalName}${suffix}_${Date.now()}`;
         }
+        const fileName = `${filename}.${ext}`;
 
-        const url = URL.createObjectURL(stitchedBlob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `${filename}.${ext}`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
+        publishExport(
+            stitchedBlob,
+            fileName,
+            'streamer',
+            gcsUri,
+            gcsUri ? undefined : 'Could not be saved to cloud storage — download only.',
+            deliver,
+        );
 
-        logEvent('export', 'stitch-only', 'success', { aspectRatio: targetAspectRatio, ...subtitleLogMeta() });
+        logEvent('export', 'stitch-only', 'success', {
+            aspectRatio: targetAspectRatio,
+            gcsUri,
+            ...subtitleLogMeta(),
+        });
 
     } catch (e) {
         console.error("Export failed", e);
@@ -356,12 +456,12 @@ const Studio: React.FC<StudioProps> = ({
     }
   };
 
-  const handleDownloadFullGameplay = async () => {
+  const handleDownloadFullGameplay = async (deliver: DeliverMode = 'download') => {
       if (finalBlobs.length === 0) return;
       
       // If Streamer Only, redirect to simple stitch
       if (layoutType === 'streamer-only') {
-          await handleDownloadStreamerOnly();
+          await handleDownloadStreamerOnly(deliver);
           return;
       }
 
@@ -371,13 +471,14 @@ const Studio: React.FC<StudioProps> = ({
       }
 
       setIsProcessingExport(true);
+      setDeliverMode(deliver);
       setExportProgress("Preparing streamer track & composite in parallel...");
 
       const wantsSubtitles = burnSubtitles;
       const stitchStreamerPromise = stitchClipsServer(finalBlobs);
 
       try {
-          const stitchedStreamerBlob = await stitchStreamerPromise;
+          const { blob: stitchedStreamerBlob } = await stitchStreamerPromise;
           const stitchedStreamerUrl = URL.createObjectURL(stitchedStreamerBlob);
 
           setExportProgress("Compositing streamer over gameplay (keep this tab active)...");
@@ -393,26 +494,45 @@ const Studio: React.FC<StudioProps> = ({
           URL.revokeObjectURL(stitchedStreamerUrl);
 
           let finalBlob = compositeBlob;
+          let gcsUri: string | undefined;
+          let saveError: string | undefined;
 
           if (wantsSubtitles) {
               const srt = buildFallbackSrt(segments);
               if (srt.trim()) {
-                  finalBlob = await burnSubtitlesServer(compositeBlob, srt, setExportProgress);
+                  // The subtitle pass runs server-side, so it can persist the
+                  // result in the same round trip.
+                  const burned = await burnSubtitlesServer(compositeBlob, srt, setExportProgress, true);
+                  finalBlob = burned.blob;
+                  gcsUri = burned.gcsUri;
+              }
+          }
+
+          if (!gcsUri) {
+              // Pure browser-side composite: the server has never seen this
+              // render, so upload it explicitly. Best-effort — a storage failure
+              // must not cost the user the render they just waited for.
+              try {
+                  gcsUri = await saveExportToGcs(finalBlob, 'mix', setExportProgress);
+              } catch (uploadErr) {
+                  console.error('Saving export to GCS failed', uploadErr);
+                  saveError = 'Could not be saved to cloud storage — download only.';
               }
           }
 
           const ext = finalBlob.type.includes('mp4') ? 'mp4' : 'webm';
           const originalName = gameplayFile.name.substring(0, gameplayFile.name.lastIndexOf('.')) || gameplayFile.name;
           const suffix = wantsSubtitles ? '_Subtitled' : '';
-          const url = URL.createObjectURL(finalBlob);
-          const a = document.createElement('a');
-          a.href = url;
-          a.download = `GamerHeads_${originalName}_Mix${suffix}_${Date.now()}.${ext}`;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
+          const fileName = `GamerHeads_${originalName}_Mix${suffix}_${Date.now()}.${ext}`;
 
-          logEvent('export', 'composite', 'success', { aspectRatio: targetAspectRatio, layout: layoutType, ...subtitleLogMeta() });
+          publishExport(finalBlob, fileName, 'composite', gcsUri, saveError, deliver);
+
+          logEvent('export', 'composite', 'success', {
+              aspectRatio: targetAspectRatio,
+              layout: layoutType,
+              gcsUri,
+              ...subtitleLogMeta(),
+          });
 
       } catch (e) {
           console.error("Full export failed", e);
@@ -930,7 +1050,7 @@ const Studio: React.FC<StudioProps> = ({
                 </div>
 
                 {/* Buttons */}
-                <div className="flex flex-wrap gap-4 justify-center items-center">
+                <div className="flex flex-wrap gap-3 justify-center items-center">
                     <button 
                         onClick={() => {
                             setCurrentPlayIndex(0);
@@ -939,12 +1059,37 @@ const Studio: React.FC<StudioProps> = ({
                     >
                         Replay All
                     </button>
-                    <div className="w-px h-8 bg-gray-600 mx-2 hidden sm:block"></div>
-                    
+                    <div className="w-px h-8 bg-gray-600 mx-1 hidden sm:block"></div>
+
+                    {/* Preview renders the real export (stitched / composited /
+                        subtitled) and shows it inline instead of downloading. */}
+                    <NeonButton
+                        onClick={() => handleDownloadFullGameplay('preview')}
+                        disabled={layoutType !== 'streamer-only' && !gameplayFile}
+                        isLoading={isProcessingExport && deliverMode === 'preview'}
+                        variant="secondary"
+                        className="text-xs px-4 border-google-blue/60 text-google-blue hover:bg-google-blue/10"
+                    >
+                        {layoutType === 'streamer-only' ? '▶ Preview Streamer Video' : '▶ Preview Final Mix'}
+                    </NeonButton>
+
+                    {layoutType !== 'streamer-only' && (
+                        <NeonButton
+                            onClick={() => handleDownloadStreamerOnly('preview')}
+                            isLoading={isProcessingExport && deliverMode === 'preview'}
+                            variant="secondary"
+                            className="text-xs px-4 border-gray-600 text-gray-300 hover:bg-gray-700"
+                        >
+                            ▶ Preview Streamer Only
+                        </NeonButton>
+                    )}
+
+                    <div className="w-px h-8 bg-gray-600 mx-1 hidden sm:block"></div>
+
                     {layoutType !== 'streamer-only' && (
                         <NeonButton 
-                            onClick={handleDownloadStreamerOnly} 
-                            isLoading={isProcessingExport} 
+                            onClick={() => handleDownloadStreamerOnly('download')}
+                            isLoading={isProcessingExport && deliverMode === 'download'}
                             variant="secondary"
                             className="text-xs px-4 border-gray-600 text-gray-300 hover:bg-gray-700"
                         >
@@ -953,9 +1098,9 @@ const Studio: React.FC<StudioProps> = ({
                     )}
                     
                     <NeonButton 
-                        onClick={handleDownloadFullGameplay} 
+                        onClick={() => handleDownloadFullGameplay('download')}
                         disabled={layoutType !== 'streamer-only' && !gameplayFile} 
-                        isLoading={isProcessingExport}
+                        isLoading={isProcessingExport && deliverMode === 'download'}
                         className="text-xs px-4"
                     >
                         {layoutType === 'streamer-only' ? 'Download Streamer Video' : 'Download Final Mix'}
@@ -976,8 +1121,66 @@ const Studio: React.FC<StudioProps> = ({
                           {exportProgress || "Processing video..."}
                       </div>
                       <p className="text-xs text-google-yellow font-bold animate-bounce">
-                          ⚠️ IMPORTANT: Keep this tab active and visible until the download starts to prevent glitches.
+                          ⚠️ IMPORTANT: Keep this tab active and visible until
+                          {deliverMode === 'preview' ? ' the preview appears' : ' the download starts'} to prevent glitches.
                       </p>
+                  </div>
+              )}
+
+              {exportPreview && !isProcessingExport && (
+                  <div
+                      ref={previewPanelRef}
+                      className="mt-8 w-full max-w-3xl bg-[#1c1c1c] border border-gray-700 rounded-xl p-5"
+                  >
+                      <div className="flex items-center justify-between gap-4 mb-3">
+                          <h4 className="text-sm font-bold text-white">
+                              {exportPreview.downloaded ? '✅ Final export ready' : '▶ Final render preview'}
+                              <span className="ml-2 text-xs font-normal text-gray-400">
+                                  {exportPreview.kind === 'composite' ? 'Full Mix' : 'Streamer Only'}
+                                  {exportPreview.subtitles ? ' · subtitled' : ''}
+                              </span>
+                          </h4>
+                          <button
+                              onClick={() => setExportPreview(null)}
+                              className="text-gray-500 hover:text-white text-xs"
+                              aria-label="Dismiss export preview"
+                          >
+                              Dismiss
+                          </button>
+                      </div>
+
+                      <video
+                          key={exportPreview.url}
+                          src={exportPreview.url}
+                          controls
+                          autoPlay={!exportPreview.downloaded}
+                          playsInline
+                          aria-label={`Preview of ${exportPreview.fileName}`}
+                          className="w-full max-h-[50vh] rounded-lg bg-black"
+                      />
+
+                      <div className="mt-3 flex flex-wrap items-center gap-3">
+                          <NeonButton
+                              onClick={() => triggerDownload(exportPreview.url, exportPreview.fileName)}
+                              variant={exportPreview.downloaded ? 'secondary' : 'primary'}
+                              className={exportPreview.downloaded
+                                  ? 'text-xs px-4 border-gray-600 text-gray-300 hover:bg-gray-700'
+                                  : 'text-xs px-4'}
+                          >
+                              {exportPreview.downloaded ? 'Download again' : '⬇ Download this file'}
+                          </NeonButton>
+                          <span className="text-xs text-gray-500 break-all">{exportPreview.fileName}</span>
+                      </div>
+
+                      {exportPreview.gcsUri ? (
+                          <p className="mt-3 text-xs text-google-green break-all">
+                              ☁️ Saved to cloud storage: <code className="text-gray-400">{exportPreview.gcsUri}</code>
+                          </p>
+                      ) : (
+                          <p className="mt-3 text-xs text-google-yellow">
+                              ⚠️ {exportPreview.saveError || 'Not saved to cloud storage.'}
+                          </p>
+                      )}
                   </div>
               )}
           </div>

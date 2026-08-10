@@ -1,5 +1,6 @@
 
 import { LogEntry } from '../types';
+import { getStoredToken } from './auth';
 
 export const getUserId = (): string => {
     if (typeof window === 'undefined') return 'unknown';
@@ -22,8 +23,9 @@ export const logEvent = async (
 ) => {
     try {
         const userId = getUserId();
-        // Fire and forget
-        const token = sessionStorage.getItem('gh_id_token');
+        // Fire and forget. Deliberately NOT apiFetch: a background log must never
+        // trigger a session-expired prompt or a token refresh.
+        const token = getStoredToken();
         fetch('/api/log', {
             method: 'POST',
             headers: {

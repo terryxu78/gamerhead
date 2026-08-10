@@ -44,9 +44,19 @@ export interface AvatarConfig {
   appearance: string;
   setting: string;
   aspectRatio: '16:9' | '9:16';
-  referenceImage?: string; // Base64 string
+  referenceImage?: string; // Base64 string — never persisted
+  /** gs:// URI of the reference image, so it survives a project restore. */
+  referenceImageGcsUri?: string;
   model: 'gemini-3.1-flash-image';
   gamingDevice?: string;
+}
+
+/** One generated avatar, kept so it can be reused instead of regenerated. */
+export interface AvatarHistoryEntry {
+  gcsUri: string;
+  prompt: string;
+  aspectRatio: '16:9' | '9:16' | null;
+  createdAt: number | null;
 }
 
 export interface VeoSegment {
@@ -64,6 +74,72 @@ export interface VeoSegment {
   videoOptions?: string[];
   selectedOptionIndex?: number;
   generatedUsingPrevUrl?: string;
+  // gs:// URI of the generated clip, so the segment can be restored from
+  // history after the in-memory blob URL is gone.
+  videoGcsUri?: string;
+  videoOptionGcsUris?: (string | undefined)[];
+}
+
+/** A finished render that has been persisted to GCS. */
+export interface ExportRecord {
+  gcsUri: string;
+  kind: 'streamer' | 'composite';
+  subtitles: boolean;
+  aspectRatio: TargetAspectRatio;
+  layoutType?: LayoutType;
+  fileName: string;
+  createdAt: number;
+}
+
+/** Summary row used by the history list. */
+export interface ProjectSummary {
+  id: string;
+  name: string;
+  gameTitle: string | null;
+  gameUrl: string | null;
+  targetAspectRatio: TargetAspectRatio | null;
+  layoutType: LayoutType | null;
+  segmentCount: number;
+  exportCount: number;
+  hasScript: boolean;
+  hasAvatar: boolean;
+  avatarImageGcsUri: string | null;
+  createdAt: number | null;
+  updatedAt: number | null;
+}
+
+/**
+ * Fingerprint of the gameplay video a project's script was generated from.
+ * The `File` itself cannot be persisted, so re-attaching it after a restore is
+ * unavoidable — this lets the app tell "the same file again" from "a different
+ * video", and only invalidate the script in the latter case.
+ */
+export interface GameplayFileMeta {
+  name: string;
+  size: number;
+  lastModified: number;
+}
+
+/** Everything needed to restore a working session. */
+export interface ProjectPayload {
+  id?: string;
+  name: string;
+  gameInfo: Omit<GameInfo, 'videoFile'>;
+  avatarConfig: AvatarConfig | null;
+  scriptText: string | null;
+  segments: VeoSegment[];
+  exports: ExportRecord[];
+  avatarImageGcsUri?: string | null;
+  avatarHistory?: AvatarHistoryEntry[];
+  gameplayFileMeta?: GameplayFileMeta | null;
+  createdAt?: number | null;
+  updatedAt?: number | null;
+}
+
+export interface CurrentUserInfo {
+  email: string | null;
+  isAdmin: boolean;
+  adminEnabled: boolean;
 }
 
 export interface StudioState {

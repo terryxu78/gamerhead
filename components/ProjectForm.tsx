@@ -1,11 +1,12 @@
 
 import React, { useState } from 'react';
 import NeonButton from './NeonButton';
+import { TextField, TextArea } from './TextInput';
 import { GameInfo, LayoutType, TargetAspectRatio, GamingDevice } from '../types';
 
 interface ProjectFormProps {
   form: GameInfo;
-  onChange: (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => void;
+  onCommit: (name: string, value: string) => void;
   onFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
   setFieldValue: (name: keyof GameInfo, value: any) => void;
   isLoading: boolean;
@@ -16,7 +17,7 @@ interface ProjectFormProps {
 
 const ProjectForm: React.FC<ProjectFormProps> = ({
   form,
-  onChange,
+  onCommit,
   onFileChange,
   setFieldValue,
   isLoading,
@@ -327,11 +328,10 @@ const ProjectForm: React.FC<ProjectFormProps> = ({
           {/* Game Title */}
           <div>
             <label className="block text-sm font-bold text-gray-300 mb-2">Game Title <span className="text-google-red">*</span></label>
-            <input
-              type="text"
+            <TextField
               name="title"
               value={form.title}
-              onChange={onChange}
+              onCommit={onCommit}
               disabled={isLoading}
               placeholder="e.g. Cyber Rush 2077"
               className="w-full bg-[#2D2D2D] border border-gray-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-google-blue focus:border-transparent outline-none transition-all placeholder-gray-500 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -362,11 +362,12 @@ const ProjectForm: React.FC<ProjectFormProps> = ({
             {form.searchGrounding && (
               <div className="animate-fade-in pt-2">
                 <label className="block text-xs font-bold text-gray-300 mb-2">Game URL <span className="text-google-red">*</span></label>
-                <input
-                  type="url"
+                <TextField
+                  type="text"
+                  inputMode="url"
                   name="url"
                   value={form.url || ''}
-                  onChange={onChange}
+                  onCommit={onCommit}
                   disabled={isLoading}
                   placeholder="e.g. https://store.steampowered.com/app/123456/Cyber_Rush/"
                   className="w-full bg-[#1e1e1e] border border-gray-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-google-blue focus:border-transparent outline-none transition-all placeholder-gray-500 disabled:opacity-50"
@@ -403,11 +404,10 @@ const ProjectForm: React.FC<ProjectFormProps> = ({
           {/* CTA - Freeform */}
           <div>
             <label className="block text-sm font-bold text-gray-300 mb-2">Call to Action <span className="text-google-red">*</span></label>
-            <input
-              type="text"
+            <TextField
               name="cta"
               value={form.cta}
-              onChange={onChange}
+              onCommit={onCommit}
               disabled={isLoading}
               placeholder="e.g. Download on Steam today for 20% off!"
               className="w-full bg-[#2D2D2D] border border-gray-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-google-blue focus:border-transparent outline-none transition-all placeholder-gray-500 disabled:opacity-50 disabled:cursor-not-allowed"
@@ -444,10 +444,10 @@ const ProjectForm: React.FC<ProjectFormProps> = ({
             <label className="block text-sm font-bold text-gray-300 mb-2">
               Specific instructions for streamer, if any. <span className="text-gray-500 font-normal">(Optional)</span>
             </label>
-            <textarea
+            <TextArea
               name="additionalInstructions"
               value={form.additionalInstructions}
-              onChange={onChange}
+              onCommit={onCommit}
               disabled={isLoading}
               placeholder="e.g. Use an ASMR voice, be super sarcastic, mention the double-jump mechanic, and sound like a pro esports player."
               rows={3}

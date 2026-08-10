@@ -66,7 +66,10 @@ const AdminDashboard: React.FC = () => {
             });
 
             const res = await apiFetch(`/api/admin/stats?${query}`);
-            if (!res.ok) throw new Error("Failed to fetch logs");
+            if (!res.ok) {
+                const body = await res.json().catch(() => ({}));
+                throw new Error(body.error || `Failed to fetch logs (${res.status})`);
+            }
             
             const data = await res.json();
             setLogs(data.logs || []);

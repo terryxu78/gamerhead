@@ -117,7 +117,13 @@ export const generateStreamerScript = async (
 // ---------------------------------------------------------------------------
 // AVATAR IMAGE GENERATION (Nano2 / gemini image model)
 // ---------------------------------------------------------------------------
-export const generateStreamerAvatar = async (config: AvatarConfig): Promise<string> => {
+/** A generated avatar: the data URL for immediate use plus its durable gs:// URI. */
+export interface AvatarResult {
+  imageData: string;
+  gcsUri?: string;
+}
+
+export const generateStreamerAvatar = async (config: AvatarConfig): Promise<AvatarResult> => {
   const prompt = constructAvatarPrompt(config);
 
   // Extract reference image data if present
@@ -141,8 +147,13 @@ export const generateStreamerAvatar = async (config: AvatarConfig): Promise<stri
       })
     });
 
-    logEvent('image', config.model, 'success');
-    return result.imageData;
+    // gcsUri in the log meta is what makes the avatar downloadable from the
+    // Admin activity log — previously image rows had no file at all.
+    logEvent('image', config.model, 'success', {
+      aspectRatio: config.aspectRatio,
+      gcsUri: result.gcsUri,
+    });
+    return { imageData: result.imageData, gcsUri: result.gcsUri };
   } catch (error: any) {
     logEvent('image', config.model, 'failed', { error: error.message });
     throw error;
@@ -173,6 +184,12 @@ export const analyzeScriptForVeo = async (script: string): Promise<VeoSegment[]>
 // ---------------------------------------------------------------------------
 // VEO VIDEO CLIP GENERATION
 // ---------------------------------------------------------------------------
+/** A generated clip: a blob/data URL for immediate playback plus the durable gs:// URI. */
+export interface VeoClipResult {
+  blobUrl: string;
+  gcsUri?: string;
+}
+
 export const generateVeoClip = async (
   prompt: string,
   dialogue: string,
@@ -182,7 +199,7 @@ export const generateVeoClip = async (
   model: 'veo-3.1-generate-001' | 'veo-3.1-fast-generate-001',
   signal?: AbortSignal,
   gamingDevice?: string
-): Promise<string> => {
+): Promise<VeoClipResult> => {
   const refinedPrompt = constructVeoGenerationPrompt(prompt, dialogue, durationSeconds, gamingDevice);
 
   if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
@@ -245,7 +262,8 @@ export const generateVeoClip = async (
     // Step 3a: Server returned inline base64 video (no GCS URI)
     if (pollResult.videoBase64) {
       logEvent('video', model, 'success', { duration: durationSeconds });
-      return pollResult.videoBase64; // data:video/mp4;base64,... — usable directly in <video src>
+      // data:video/mp4;base64,... — usable directly in <video src>, but not durable.
+      return { blobUrl: pollResult.videoBase64 };
     }
 
     const videoUri: string = pollResult.videoUri;
@@ -256,11 +274,9 @@ export const generateVeoClip = async (
     // Step 3b: Download video through server proxy (uses ADC Bearer token)
     try {
       const downloadUrl = `/api/gemini/download-video?uri=${encodeURIComponent(videoUri)}`;
-      const token = sessionStorage.getItem('gh_id_token');
-      const downloadResp = await fetch(downloadUrl, {
-        signal,
-        headers: token ? { 'Authorization': `Bearer ${token}` } : {}
-      });
+      // authFetch (not raw fetch): a bare fetch here skipped the 401 refresh, so a
+      // token that expired during the multi-minute Veo poll failed the download.
+      const downloadResp = await authFetch(downloadUrl, { signal });
       if (!downloadResp.ok) {
         const errText = await downloadResp.text().catch(() => downloadResp.statusText);
         throw new Error(`Failed to download video (${downloadResp.status}): ${errText}`);
@@ -270,7 +286,10 @@ export const generateVeoClip = async (
         duration: durationSeconds,
         gcsUri: videoUri.startsWith('gs://') ? videoUri : undefined,
       });
-      return URL.createObjectURL(blob);
+      return {
+        blobUrl: URL.createObjectURL(blob),
+        gcsUri: videoUri.startsWith('gs://') ? videoUri : undefined,
+      };
     } catch (err: any) {
       if (err.name === 'AbortError') throw err;
       logEvent('video', model, 'failed', { error: err.message });
@@ -279,17 +298,25 @@ export const generateVeoClip = async (
   }
 };
 
+/** A finished render: the blob for local preview/download plus its gs:// URI when persisted. */
+export interface RenderResult {
+    blob: Blob;
+    gcsUri?: string;
+}
+
 /**
  * Server-side video stitching via FFmpeg.
  * Uploads clip blobs to the server and concatenates them losslessly.
  * If `subtitleSrt` is provided, the server burns it into the stitched video
- * (requires re-encode).
+ * (requires re-encode). When `saveToGcs` is set the server also persists the
+ * result and returns its gs:// URI in the X-Gcs-Uri response header.
  */
 export const stitchClipsServer = async (
     clipUrls: string[],
     onProgress?: (msg: string) => void,
     subtitleSrt?: string,
-): Promise<Blob> => {
+    saveToGcs = false,
+): Promise<RenderResult> => {
     const formData = new FormData();
 
     for (let i = 0; i < clipUrls.length; i++) {
@@ -305,11 +332,10 @@ export const stitchClipsServer = async (
     } else {
         if (onProgress) onProgress('Stitching on server...');
     }
+    if (saveToGcs) formData.append('saveToGcs', 'true');
 
-    const token = sessionStorage.getItem('gh_id_token');
     const res = await authFetch('/api/gemini/stitch-clips', {
         method: 'POST',
-        headers: token ? { 'Authorization': `Bearer ${token}` } : {},
         body: formData,
     });
 
@@ -318,7 +344,10 @@ export const stitchClipsServer = async (
         throw new Error(`Stitch failed: ${errText}`);
     }
 
-    return await res.blob();
+    return {
+        blob: await res.blob(),
+        gcsUri: res.headers.get('X-Gcs-Uri') || undefined,
+    };
 };
 
 /**
@@ -329,22 +358,52 @@ export const burnSubtitlesServer = async (
     videoBlob: Blob,
     srt: string,
     onProgress?: (msg: string) => void,
-): Promise<Blob> => {
+    saveToGcs = false,
+): Promise<RenderResult> => {
     const formData = new FormData();
     const ext = videoBlob.type.includes('webm') ? 'webm' : 'mp4';
     formData.append('video', videoBlob, `input.${ext}`);
     formData.append('srt', srt);
+    if (saveToGcs) formData.append('saveToGcs', 'true');
     if (onProgress) onProgress('Burning subtitles into final video...');
 
-    const token = sessionStorage.getItem('gh_id_token');
     const res = await authFetch('/api/gemini/burn-subtitles', {
         method: 'POST',
-        headers: token ? { 'Authorization': `Bearer ${token}` } : {},
         body: formData,
     });
     if (!res.ok) {
         const errText = await res.text().catch(() => res.statusText);
         throw new Error(`Burn subtitles failed: ${errText}`);
     }
-    return res.blob();
+    return {
+        blob: await res.blob(),
+        gcsUri: res.headers.get('X-Gcs-Uri') || undefined,
+    };
+};
+
+/**
+ * Upload a render the server never saw — the browser-side Canvas/MediaRecorder
+ * PiP composite — so it can be persisted to GCS and previewed later.
+ */
+export const saveExportToGcs = async (
+    videoBlob: Blob,
+    label: string,
+    onProgress?: (msg: string) => void,
+): Promise<string> => {
+    if (onProgress) onProgress('Saving final video to cloud storage...');
+    const formData = new FormData();
+    const ext = videoBlob.type.includes('webm') ? 'webm' : 'mp4';
+    formData.append('video', videoBlob, `export.${ext}`);
+    formData.append('label', label);
+
+    const res = await authFetch('/api/gemini/save-export', {
+        method: 'POST',
+        body: formData,
+    });
+    if (!res.ok) {
+        const errText = await res.text().catch(() => res.statusText);
+        throw new Error(`Save to GCS failed: ${errText}`);
+    }
+    const data = await res.json();
+    return data.gcsUri;
 };

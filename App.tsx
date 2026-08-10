@@ -4,7 +4,8 @@ import ProjectForm from './components/ProjectForm';
 import AvatarGenerator from './components/AvatarGenerator';
 import Studio from './components/Studio';
 import AdminDashboard from './components/AdminDashboard';
-import { GameInfo, ScriptResult, AvatarConfig, TargetAspectRatio, VeoSegment } from './types';
+import ProjectHistory from './components/ProjectHistory';
+import { GameInfo, ScriptResult, AvatarConfig, TargetAspectRatio, VeoSegment, ExportRecord, AvatarHistoryEntry, GameplayFileMeta, CurrentUserInfo } from './types';
 import { generateStreamerScript } from './services/gemini';
 import { getUserId } from './services/logging';
 import NeonButton from './components/NeonButton';
@@ -16,11 +17,27 @@ import {
     getStoredToken,
     storeToken,
     GoogleUser,
+    SESSION_EXPIRED_EVENT,
 } from './services/auth';
+import {
+    fetchCurrentUser,
+    loadProject,
+    saveProject,
+    stripGameInfo,
+    stripAvatarConfig,
+    deriveProjectName,
+    fetchObjectAsBlobUrl,
+    fetchObjectAsDataUrl,
+} from './services/projects';
 
 // Internal Component containing the full app logic
 // This component is fully unmounted and remounted on reset
-const GameHeads: React.FC<{ onReset: () => void; currentUser: GoogleUser | null; onSignOut?: () => void }> = ({ onReset, currentUser, onSignOut }) => {
+const GameHeads: React.FC<{
+  onReset: () => void;
+  currentUser: GoogleUser | null;
+  onSignOut?: () => void;
+  userInfo: CurrentUserInfo | null;
+}> = ({ onReset, currentUser, onSignOut, userInfo }) => {
   const [activeTab, setActiveTab] = useState<'script' | 'avatar' | 'studio' | 'admin'>('script');
   // Ensure user ID exists on mount
   useEffect(() => {
@@ -64,6 +81,26 @@ const GameHeads: React.FC<{ onReset: () => void; currentUser: GoogleUser | null;
   const [showInvalidationAlert, setShowInvalidationAlert] = useState<string | null>(null);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
 
+  // ── Project persistence ────────────────────────────────────────────────
+  // Everything used to live only in React state, so a lost session or a
+  // reload meant re-typing the game title / store link / CTA and
+  // regenerating every clip. The working set is now mirrored server-side.
+  const [projectId, setProjectId] = useState<string | null>(null);
+  const [exportRecords, setExportRecords] = useState<ExportRecord[]>([]);
+  const [avatarImageGcsUri, setAvatarImageGcsUri] = useState<string | null>(null);
+  const [avatarHistory, setAvatarHistory] = useState<AvatarHistoryEntry[]>([]);
+  const [savedGameplayMeta, setSavedGameplayMeta] = useState<GameplayFileMeta | null>(null);
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [lastSavedAt, setLastSavedAt] = useState<number | null>(null);
+  const [showHistory, setShowHistory] = useState(false);
+  const [isRestoring, setIsRestoring] = useState(false);
+
+  // Suppresses autosave while a project is being loaded into state.
+  const restoringRef = useRef(false);
+  const projectIdRef = useRef<string | null>(null);
+  useEffect(() => { projectIdRef.current = projectId; }, [projectId]);
+
   const handleStartOverClick = () => {
     setShowResetConfirm(true);
   };
@@ -73,8 +110,186 @@ const GameHeads: React.FC<{ onReset: () => void; currentUser: GoogleUser | null;
     onReset();
   };
 
-  // Monitor avatar image changes to clear generated video clips from studio
+  const handleExportSaved = useCallback((record: ExportRecord) => {
+    setExportRecords(prev => [record, ...prev].slice(0, 50));
+  }, []);
+
+  /** The avatar image itself, so a restored project has a streamer again. */
+  const handleAvatarImage = useCallback((imageUrl: string, gcsUri?: string) => {
+    setGeneratedAvatarImage(imageUrl || null);
+    if (!imageUrl) setAvatarImageGcsUri(null);
+    else if (gcsUri) setAvatarImageGcsUri(gcsUri);
+  }, []);
+
+  const handleAvatarGenerated = useCallback((entry: AvatarHistoryEntry) => {
+    setAvatarHistory(prev => [entry, ...prev.filter(a => a.gcsUri !== entry.gcsUri)].slice(0, 24));
+  }, []);
+
+  // Strip transient fields before persisting — blob URLs are meaningless once
+  // the tab is gone, but the gs:// URI behind them is not.
+  const serialisableSegments = useCallback((segs: VeoSegment[]): VeoSegment[] =>
+    segs.map(({ videoUrl, videoOptions, isGenerating, generatedUsingPrevUrl, ...rest }) => rest),
+  []);
+
+  const hasSomethingWorthSaving = Boolean(
+    (form.title && form.title.trim()) || result || segments.length > 0
+  );
+
+  // Debounced autosave. Fires on any meaningful change to the working set.
   useEffect(() => {
+    if (restoringRef.current || !hasSomethingWorthSaving) return;
+
+    const timer = setTimeout(async () => {
+      setSaveState('saving');
+      try {
+        const res = await saveProject({
+          id: projectIdRef.current || undefined,
+          name: deriveProjectName(form),
+          gameInfo: stripGameInfo(form),
+          avatarConfig: stripAvatarConfig(avatarConfig),
+          scriptText: result?.fullText || null,
+          segments: serialisableSegments(segments),
+          exports: exportRecords,
+          avatarImageGcsUri,
+          avatarHistory,
+          gameplayFileMeta: savedGameplayMeta,
+        });
+        if (!projectIdRef.current) setProjectId(res.id);
+        setLastSavedAt(res.updatedAt);
+        setSaveError(null);
+        setSaveState('saved');
+      } catch (e: any) {
+        console.error('[App] Autosave failed:', e);
+        setSaveError(e?.message || 'Unknown error');
+        setSaveState('error');
+      }
+    }, 1500);
+
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    form.title, form.url, form.cta, form.gamingDevice, form.dialoguePacking,
+    form.additionalInstructions, form.targetAspectRatio, form.layoutType,
+    form.pipPlacement, form.stackedPlacement, form.searchGrounding,
+    avatarConfig, result?.fullText, segments, exportRecords, hasSomethingWorthSaving,
+    avatarImageGcsUri, avatarHistory, savedGameplayMeta,
+  ]);
+
+  /** Restore a saved project into the editor. */
+  const handleLoadProject = useCallback(async (id: string) => {
+    restoringRef.current = true;
+    setIsRestoring(true);
+    setError(null);
+    try {
+      const project = await loadProject(id);
+
+      // The gameplay File cannot be persisted, so it always has to be re-picked.
+      setForm(prev => ({
+        ...prev,
+        ...(project.gameInfo || {}),
+        videoFile: null,
+      }));
+      setCachedVideo(null);
+      setSavedGameplayMeta(project.gameplayFileMeta || null);
+
+      // Avatar config, with the reference image pulled back from storage so the
+      // "lock the character's look" workflow survives a restore.
+      if (project.avatarConfig) {
+        const cfg = { ...project.avatarConfig };
+        if (cfg.referenceImageGcsUri) {
+          try {
+            cfg.referenceImage = await fetchObjectAsDataUrl(cfg.referenceImageGcsUri);
+          } catch {
+            delete cfg.referenceImage;
+          }
+        }
+        setAvatarConfig(cfg);
+      }
+
+      // Clips come back through the same-origin proxy as blob: URLs rather than
+      // signed URLs. The bucket has no CORS config, so a signed URL can be
+      // played but not fetched for stitching, and a canvas draw for last-frame
+      // extraction fails outright — a restored project could be watched but not
+      // exported. blob: URLs behave exactly like freshly generated clips.
+      const restoredSegments = await Promise.all(
+        (project.segments || []).map(async (seg) => {
+          if (!seg.videoGcsUri) return { ...seg, videoUrl: undefined };
+          try {
+            return { ...seg, videoUrl: await fetchObjectAsBlobUrl(seg.videoGcsUri) };
+          } catch {
+            return { ...seg, videoUrl: undefined };
+          }
+        })
+      );
+
+      setSegments(restoredSegments);
+      if (project.scriptText) {
+        setResult({
+          fullText: project.scriptText,
+          segments: restoredSegments,
+          groundingUrls: [],
+        });
+        setScriptHistory([project.scriptText]);
+        setHistoryIndex(0);
+      } else {
+        setResult(null);
+        setScriptHistory([]);
+        setHistoryIndex(-1);
+      }
+
+      // Put the avatar back last, and suppress the invalidation effect so it
+      // does not wipe the clips we just restored.
+      setAvatarHistory(project.avatarHistory || []);
+      setAvatarImageGcsUri(project.avatarImageGcsUri || null);
+      let avatarRestored = false;
+      if (project.avatarImageGcsUri) {
+        try {
+          const dataUrl = await fetchObjectAsDataUrl(project.avatarImageGcsUri);
+          skipAvatarInvalidationRef.current = true;
+          setGeneratedAvatarImage(dataUrl);
+          avatarRestored = true;
+        } catch {
+          skipAvatarInvalidationRef.current = true;
+          setGeneratedAvatarImage(null);
+        }
+      } else {
+        skipAvatarInvalidationRef.current = true;
+        setGeneratedAvatarImage(null);
+      }
+
+      setExportRecords(project.exports || []);
+      setProjectId(project.id || id);
+      projectIdRef.current = project.id || id;
+      setLastSavedAt(project.updatedAt || null);
+      setSaveState('saved');
+      setActiveTab('script');
+      setShowInvalidationAlert(
+        [
+          avatarRestored
+            ? 'Project restored, including the avatar and generated clips.'
+            : 'Project restored, but this project has no saved avatar — regenerate one before opening the Studio.',
+          project.gameplayFileMeta
+            ? `Re-attach the same gameplay video ("${project.gameplayFileMeta.name}") to keep the script and clips. Picking a different video regenerates from scratch.`
+            : 'Re-attach a gameplay video to export a Full Mix — video files cannot be saved in history.',
+        ].join(' ')
+      );
+    } finally {
+      setIsRestoring(false);
+      // Let state settle before re-arming autosave, otherwise the restore
+      // itself would immediately trigger a redundant save.
+      setTimeout(() => { restoringRef.current = false; }, 100);
+    }
+  }, []);
+
+  // Monitor avatar image changes to clear generated video clips from studio.
+  // Restoring a project also changes the avatar, but there the clips are being
+  // deliberately put back — so the restore path sets this flag to skip one run.
+  const skipAvatarInvalidationRef = useRef(false);
+  useEffect(() => {
+    if (skipAvatarInvalidationRef.current) {
+      skipAvatarInvalidationRef.current = false;
+      return;
+    }
     if (segments.length > 0) {
       setSegments(prev => prev.map(seg => ({
         ...seg,
@@ -86,49 +301,52 @@ const GameHeads: React.FC<{ onReset: () => void; currentUser: GoogleUser | null;
     }
   }, [generatedAvatarImage]);
 
-  const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
-    const { name, value } = e.target;
-    if (form[name] === value) return;
+  /**
+   * Changing project inputs invalidates the script / shot list. Each setter uses
+   * an updater that returns the previous reference when there is nothing to
+   * clear, so React bails out instead of re-rendering on every keystroke — the
+   * old version allocated fresh arrays per character, which is what let parent
+   * re-renders interrupt IME composition.
+   */
+  const invalidateDownstream = useCallback(() => {
+    setResult(prev => (prev === null ? prev : null));
+    setSegments(prev => (prev.length === 0 ? prev : []));
+    setScriptHistory(prev => (prev.length === 0 ? prev : []));
+    setHistoryIndex(prev => (prev === -1 ? prev : -1));
+    setActiveTab(prev => (prev === 'script' ? prev : 'script'));
+  }, []);
 
-    setForm(prev => ({ ...prev, [name]: value }));
+  const setFieldValue = useCallback((name: keyof GameInfo, value: any) => {
+      // Compare inside the updater: comparing against the render-closure `form`
+      // can drop an update when React batches fast keystrokes.
+      setForm(prev => (prev[name] === value ? prev : { ...prev, [name]: value }));
 
-    setResult(null);
-    setSegments([]);
-    setScriptHistory([]);
-    setHistoryIndex(-1);
-    setActiveTab('script');
-  };
+      // Layout / aspect-ratio changes make an existing avatar the wrong shape.
+      // These come from button clicks, never from fast typing, so reading the
+      // current form here is safe.
+      if ((name === 'layoutType' || name === 'targetAspectRatio') && generatedAvatarImage && form[name] !== value) {
+          const newLayout = name === 'layoutType' ? value : form.layoutType;
+          const newRatio = name === 'targetAspectRatio' ? value : form.targetAspectRatio;
 
-  const setFieldValue = (name: keyof GameInfo, value: any) => {
-      if (form[name] === value) return;
-
-      setForm(prev => {
-          const newState = { ...prev, [name]: value };
-
-          if ((name === 'layoutType' || name === 'targetAspectRatio') && generatedAvatarImage) {
-              const newLayout = name === 'layoutType' ? value : prev.layoutType;
-              const newRatio = name === 'targetAspectRatio' ? value : prev.targetAspectRatio;
-
-              let requiredAvatarRatio: TargetAspectRatio = '16:9';
-              if (newLayout === 'classic-pip' || newLayout === 'streamer-only') {
-                  requiredAvatarRatio = newRatio;
-              } else if (newLayout === 'stacked') {
-                  requiredAvatarRatio = newRatio === '16:9' ? '9:16' : '16:9';
-              }
-
-              setShowInvalidationAlert("Layout changed. Please regenerate your avatar to match the new format. Existing shot list is preserved, but clips must be regenerated.");
-              setGeneratedAvatarImage(null);
-              setAvatarConfig(prevConfig => ({ ...prevConfig, aspectRatio: requiredAvatarRatio }));
+          let requiredAvatarRatio: TargetAspectRatio = '16:9';
+          if (newLayout === 'classic-pip' || newLayout === 'streamer-only') {
+              requiredAvatarRatio = newRatio;
+          } else if (newLayout === 'stacked') {
+              requiredAvatarRatio = newRatio === '16:9' ? '9:16' : '16:9';
           }
-          return newState;
-      });
 
-      setResult(null);
-      setSegments([]);
-      setScriptHistory([]);
-      setHistoryIndex(-1);
-      setActiveTab('script');
-  };
+          setShowInvalidationAlert("Layout changed. Please regenerate your avatar to match the new format. Existing shot list is preserved, but clips must be regenerated.");
+          setGeneratedAvatarImage(null);
+          setAvatarConfig(prevConfig => ({ ...prevConfig, aspectRatio: requiredAvatarRatio }));
+      }
+
+      invalidateDownstream();
+  }, [form, generatedAvatarImage, invalidateDownstream]);
+
+  /** Commit handler for the IME-safe text fields. */
+  const handleFieldCommit = useCallback((name: string, value: string) => {
+      setFieldValue(name as keyof GameInfo, value);
+  }, [setFieldValue]);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
@@ -137,14 +355,27 @@ const GameHeads: React.FC<{ onReset: () => void; currentUser: GoogleUser | null;
         alert("File too large. Please select a video under 250MB.");
         return;
       }
+
+      // A restored project always has to have its gameplay video re-attached,
+      // because a File cannot be serialised. Wiping the script and every
+      // generated clip at that moment would make restoring pointless, so treat
+      // the same file (name + size + mtime) as a re-attach rather than a change.
+      const meta = { name: file.name, size: file.size, lastModified: file.lastModified };
+      const isSameFile = Boolean(
+        savedGameplayMeta &&
+        savedGameplayMeta.name === meta.name &&
+        savedGameplayMeta.size === meta.size
+      );
+
       setForm(prev => ({ ...prev, videoFile: file }));
       setCachedVideo(null);
+      setSavedGameplayMeta(meta);
 
-      setResult(null);
-      setSegments([]);
-      setScriptHistory([]);
-      setHistoryIndex(-1);
-      setActiveTab('script');
+      if (isSameFile) {
+        setActiveTab(prev => (prev === 'script' ? prev : 'script'));
+      } else {
+        invalidateDownstream();
+      }
     }
   };
 
@@ -232,6 +463,22 @@ const GameHeads: React.FC<{ onReset: () => void; currentUser: GoogleUser | null;
   return (
     <div className="min-h-screen bg-google-background text-google-text font-sans flex flex-col">
       
+      <ProjectHistory
+        open={showHistory}
+        onClose={() => setShowHistory(false)}
+        currentProjectId={projectId}
+        onLoad={handleLoadProject}
+      />
+
+      {isRestoring && (
+        <div className="fixed inset-0 z-[110] bg-black/70 flex items-center justify-center backdrop-blur-sm">
+            <div className="flex flex-col items-center gap-3">
+                <div className="w-8 h-8 border-2 border-google-blue border-t-transparent rounded-full animate-spin" />
+                <p className="text-sm text-gray-300">Restoring project…</p>
+            </div>
+        </div>
+      )}
+
       {/* Reset Confirmation Modal */}
       {showResetConfirm && (
         <div className="fixed inset-0 z-[100] bg-black/80 flex items-center justify-center p-4 backdrop-blur-sm animate-fade-in">
@@ -374,7 +621,25 @@ const GameHeads: React.FC<{ onReset: () => void; currentUser: GoogleUser | null;
             )}
 
             {activeTab !== 'admin' && (
-             <div className="md:absolute md:right-0 md:top-1/2 md:-translate-y-1/2 z-50 mt-3 md:mt-0 flex gap-2">
+             <div className="md:absolute md:right-0 md:top-1/2 md:-translate-y-1/2 z-50 mt-3 md:mt-0 flex items-center gap-2">
+                <span className="text-[10px] text-gray-500 hidden lg:block min-w-[86px] text-right" aria-live="polite">
+                    {saveState === 'saving' && 'Saving…'}
+                    {saveState === 'saved' && lastSavedAt && `Saved ${new Date(lastSavedAt).toLocaleTimeString()}`}
+                    {saveState === 'error' && (
+                        <span className="text-google-yellow" title={saveError || undefined}>Save failed</span>
+                    )}
+                </span>
+                <button
+                    type="button"
+                    onClick={() => setShowHistory(true)}
+                    className="cursor-pointer text-xs font-bold text-gray-400 hover:text-white flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-700 hover:bg-gray-700 transition-colors bg-[#2D2D2D]/80 backdrop-blur-sm shadow-sm hover:shadow-md active:scale-95 transform"
+                    title="Reopen a previous project"
+                >
+                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    History
+                </button>
                 <button 
                     type="button"
                     onClick={handleStartOverClick}
@@ -420,7 +685,7 @@ const GameHeads: React.FC<{ onReset: () => void; currentUser: GoogleUser | null;
                                 statusMessage={statusMessage}
                                 uploadProgress={uploadProgress}
                                 error={error}
-                                onChange={handleInputChange}
+                                onCommit={handleFieldCommit}
                                 onFileChange={handleFileChange}
                                 setFieldValue={setFieldValue}
                             />
@@ -429,10 +694,13 @@ const GameHeads: React.FC<{ onReset: () => void; currentUser: GoogleUser | null;
                 </div>
 
                 <div className={`${activeTab === 'avatar' ? 'block' : 'hidden'} animate-fade-in min-h-[calc(100vh-9rem)]`}>
-                <AvatarGenerator 
+                <AvatarGenerator
                         externalConfig={avatarConfig}
                         setExternalConfig={setAvatarConfig}
-                        onImageGenerated={setGeneratedAvatarImage}
+                        onImageGenerated={handleAvatarImage}
+                        onAvatarGenerated={handleAvatarGenerated}
+                        avatarHistory={avatarHistory}
+                        currentAvatarGcsUri={avatarImageGcsUri}
                         forcedAspectRatio={forcedAvatarRatio}
                         gamingDevice={form.gamingDevice}
                 />
@@ -456,6 +724,7 @@ const GameHeads: React.FC<{ onReset: () => void; currentUser: GoogleUser | null;
                             statusMessage={statusMessage}
                             externalError={error}
                             gamingDevice={form.gamingDevice}
+                            onExportSaved={handleExportSaved}
                         />
                     ) : (
                         <div className="h-full flex flex-col items-center justify-center text-center p-12 bg-google-surface rounded-3xl border border-gray-700 shadow-card">
@@ -479,12 +748,14 @@ const GameHeads: React.FC<{ onReset: () => void; currentUser: GoogleUser | null;
           </p>
         </div>
         <div className="absolute right-4 bottom-4">
-             <button 
-                onClick={() => setActiveTab('admin')}
-                className="text-[10px] text-gray-800 hover:text-gray-500 transition-colors"
-             >
-                 Admin
-             </button>
+             {userInfo?.isAdmin && (
+                 <button
+                    onClick={() => setActiveTab('admin')}
+                    className="text-[10px] text-gray-800 hover:text-gray-500 transition-colors"
+                 >
+                     Admin
+                 </button>
+             )}
         </div>
       </footer>
     </div>
@@ -537,6 +808,87 @@ const LoginPage: React.FC<{ clientId: string; onSignedIn: (user: GoogleUser, tok
     );
 };
 
+// -----------------------------------------------------------------------
+// Session expiry overlay
+//
+// Previously an expired credential meant `currentUser` went null and the whole
+// GameHeads subtree unmounted — script, shot list and generated clips all gone.
+// This overlay sits on top instead, so re-authenticating resumes exactly where
+// the user was.
+// -----------------------------------------------------------------------
+const SessionExpiredOverlay: React.FC<{
+    clientId: string | null;
+    onRecovered: (user: GoogleUser) => void;
+    onDismiss: () => void;
+}> = ({ clientId, onRecovered, onDismiss }) => {
+    const btnRef = useRef<HTMLDivElement>(null);
+    const [busy, setBusy] = useState(false);
+
+    useEffect(() => {
+        if (!clientId) return;
+        initGoogleSignIn(clientId, async (idToken) => {
+            setBusy(true);
+            try {
+                const res = await fetch('/api/auth/verify', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ idToken }),
+                });
+                if (!res.ok) return;
+                const user: GoogleUser = await res.json();
+                storeToken(idToken);
+                onRecovered(user);
+            } finally {
+                setBusy(false);
+            }
+        });
+        if (btnRef.current) renderGoogleButton(btnRef.current);
+    }, [clientId, onRecovered]);
+
+    return (
+        <div
+            className="fixed inset-0 z-[200] bg-black/85 backdrop-blur-sm flex items-center justify-center p-4"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="session-expired-title"
+        >
+            <div className="bg-google-surface border border-yellow-700 rounded-2xl p-8 max-w-md text-center shadow-2xl">
+                <div className="w-16 h-16 bg-yellow-900/30 rounded-full flex items-center justify-center mx-auto mb-4 border border-yellow-700">
+                    <span className="text-3xl">🔒</span>
+                </div>
+                <h3 id="session-expired-title" className="text-xl font-bold text-white mb-2">Your session expired</h3>
+                <p className="text-gray-300 text-sm mb-6">
+                    Sign in again to keep going. Your project, script and generated clips are still here —
+                    nothing has been lost.
+                </p>
+
+                {clientId ? (
+                    <div className="flex flex-col items-center gap-4">
+                        <div ref={btnRef} />
+                        {busy && <span className="text-xs text-gray-400">Verifying…</span>}
+                    </div>
+                ) : (
+                    // IAP-protected deployment: re-auth requires a full navigation,
+                    // there is no in-page credential to refresh.
+                    <button
+                        onClick={() => window.location.reload()}
+                        className="bg-google-blue hover:brightness-110 text-white px-6 py-2 rounded-full font-bold transition-colors"
+                    >
+                        Reload to sign in
+                    </button>
+                )}
+
+                <button
+                    onClick={onDismiss}
+                    className="mt-5 block mx-auto text-xs text-gray-500 hover:text-gray-300"
+                >
+                    Continue without signing in
+                </button>
+            </div>
+        </div>
+    );
+};
+
 const App: React.FC = () => {
     const [sessionKey, setSessionKey] = useState(0);
     const [isResetting, setIsResetting] = useState(false);
@@ -545,6 +897,15 @@ const App: React.FC = () => {
     const [googleClientId, setGoogleClientId] = useState<string | null>(null);
     const [currentUser, setCurrentUser] = useState<GoogleUser | null>(null);
     const [authLoading, setAuthLoading] = useState(true);
+    const [userInfo, setUserInfo] = useState<CurrentUserInfo | null>(null);
+    const [sessionExpired, setSessionExpired] = useState(false);
+
+    // Who am I / am I an admin. Works in every auth mode (GIS, Basic, IAP).
+    const refreshUserInfo = useCallback(() => {
+        fetchCurrentUser()
+            .then(setUserInfo)
+            .catch(() => setUserInfo(null));
+    }, []);
 
     // Fetch server config (googleClientId) on mount
     useEffect(() => {
@@ -562,27 +923,47 @@ const App: React.FC = () => {
                             body: JSON.stringify({ idToken: token }),
                         })
                             .then(r => r.ok ? r.json() : null)
-                            .then(user => { if (user) setCurrentUser(user); })
+                            .then(user => { if (user?.email) setCurrentUser(user); })
                             .catch(() => {})
                             .finally(() => setAuthLoading(false));
                     } else {
                         setAuthLoading(false);
                     }
                 } else {
-                    // No Google auth configured — open access
+                    // No GIS client configured — access is governed by IAP / Basic Auth
                     setAuthLoading(false);
                 }
             })
             .catch(() => setAuthLoading(false));
     }, []);
 
+    useEffect(() => {
+        if (!authLoading) refreshUserInfo();
+    }, [authLoading, currentUser, refreshUserInfo]);
+
+    // Any API call that could not recover from a rejected credential raises this.
+    useEffect(() => {
+        const onExpired = () => setSessionExpired(true);
+        window.addEventListener(SESSION_EXPIRED_EVENT, onExpired);
+        return () => window.removeEventListener(SESSION_EXPIRED_EVENT, onExpired);
+    }, []);
+
     const handleSignedIn = useCallback((user: GoogleUser) => {
         setCurrentUser(user);
+        setSessionExpired(false);
     }, []);
+
+    const handleSessionRecovered = useCallback((user: GoogleUser) => {
+        setCurrentUser(user);
+        setSessionExpired(false);
+        refreshUserInfo();
+    }, [refreshUserInfo]);
 
     const handleSignOut = useCallback(() => {
         signOut();
         setCurrentUser(null);
+        setUserInfo(null);
+        setSessionExpired(false);
     }, []);
 
     const handleReset = useCallback(() => {
@@ -615,7 +996,24 @@ const App: React.FC = () => {
         );
     }
 
-    return <GameHeads key={sessionKey} onReset={handleReset} currentUser={currentUser} onSignOut={googleClientId ? handleSignOut : undefined} />;
+    return (
+        <>
+            <GameHeads
+                key={sessionKey}
+                onReset={handleReset}
+                currentUser={currentUser}
+                onSignOut={googleClientId ? handleSignOut : undefined}
+                userInfo={userInfo}
+            />
+            {sessionExpired && (
+                <SessionExpiredOverlay
+                    clientId={googleClientId}
+                    onRecovered={handleSessionRecovered}
+                    onDismiss={() => setSessionExpired(false)}
+                />
+            )}
+        </>
+    );
 };
 
 export default App;

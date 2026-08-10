@@ -1,8 +1,11 @@
 
 import React, { useState, useEffect } from 'react';
 import NeonButton from './NeonButton';
-import { AvatarConfig } from '../types';
+import { TextArea } from './TextInput';
+import { AvatarConfig, AvatarHistoryEntry } from '../types';
 import { generateStreamerAvatar } from '../services/gemini';
+import { fetchObjectAsDataUrl, saveImage } from '../services/projects';
+import GcsImage from './GcsImage';
 
 const checkImageRatio = (
   base64Str: string,
@@ -67,12 +70,28 @@ const cropImageToRatio = (
 interface AvatarGeneratorProps {
   externalConfig?: AvatarConfig;
   setExternalConfig?: (config: AvatarConfig) => void;
-  onImageGenerated?: (imageUrl: string) => void;
+  /** The second argument is the durable gs:// URI, when the upload succeeded. */
+  onImageGenerated?: (imageUrl: string, gcsUri?: string) => void;
+  /** Called for each newly generated avatar so it can be kept in project history. */
+  onAvatarGenerated?: (entry: AvatarHistoryEntry) => void;
+  /** Previously generated avatars for this project, newest first. */
+  avatarHistory?: AvatarHistoryEntry[];
+  /** gs:// URI of the avatar currently in use, so the strip can mark it. */
+  currentAvatarGcsUri?: string | null;
   forcedAspectRatio?: '16:9' | '9:16' | null;
   gamingDevice?: string;
 }
 
-const AvatarGenerator: React.FC<AvatarGeneratorProps> = ({ externalConfig, setExternalConfig, onImageGenerated, forcedAspectRatio, gamingDevice }) => {
+const AvatarGenerator: React.FC<AvatarGeneratorProps> = ({
+  externalConfig,
+  setExternalConfig,
+  onImageGenerated,
+  onAvatarGenerated,
+  avatarHistory = [],
+  currentAvatarGcsUri,
+  forcedAspectRatio,
+  gamingDevice,
+}) => {
   const [localConfig, setLocalConfig] = useState<AvatarConfig>({
     appearance: '',
     setting: '',
@@ -91,6 +110,11 @@ const AvatarGenerator: React.FC<AvatarGeneratorProps> = ({ externalConfig, setEx
       return next;
     });
   }, [setExternalConfig]);
+
+  /** IME-safe commit for the free-text avatar fields. */
+  const handleConfigCommit = React.useCallback((name: string, value: string) => {
+    setConfig(prev => (prev[name as keyof AvatarConfig] === value ? prev : { ...prev, [name]: value }));
+  }, [setConfig]);
 
   const [generatedImage, setGeneratedImage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -116,11 +140,35 @@ const AvatarGenerator: React.FC<AvatarGeneratorProps> = ({ externalConfig, setEx
     setGeneratedImage(null);
 
     try {
-      const imageUrl = await generateStreamerAvatar({ ...config, gamingDevice });
-      setGeneratedImage(imageUrl);
-      if (onImageGenerated) onImageGenerated(imageUrl);
+      const { imageData, gcsUri } = await generateStreamerAvatar({ ...config, gamingDevice });
+      setGeneratedImage(imageData);
+      if (onImageGenerated) onImageGenerated(imageData, gcsUri);
+      if (gcsUri && onAvatarGenerated) {
+        onAvatarGenerated({
+          gcsUri,
+          prompt: `${config.appearance} · ${config.setting}`.slice(0, 500),
+          aspectRatio: config.aspectRatio,
+          createdAt: Date.now(),
+        });
+      }
     } catch (err: any) {
       setError("Failed to generate image. Please try again.");
+      console.error(err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  /** Reuse a previously generated avatar instead of paying for a new one. */
+  const handleReuseAvatar = async (entry: AvatarHistoryEntry) => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      const dataUrl = await fetchObjectAsDataUrl(entry.gcsUri);
+      setGeneratedImage(dataUrl);
+      if (onImageGenerated) onImageGenerated(dataUrl, entry.gcsUri);
+    } catch (err: any) {
+      setError('Could not load that avatar from cloud storage.');
       console.error(err);
     } finally {
       setIsLoading(false);
@@ -142,16 +190,24 @@ const AvatarGenerator: React.FC<AvatarGeneratorProps> = ({ externalConfig, setEx
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
-      reader.onloadend = () => {
+      reader.onloadend = async () => {
         const base64String = reader.result as string;
-        setConfig(prev => ({ ...prev, referenceImage: base64String }));
+        setConfig(prev => ({ ...prev, referenceImage: base64String, referenceImageGcsUri: undefined }));
+        // Persist it so a restored project still has the character to lock onto.
+        // Best-effort: failing to upload must not block avatar generation.
+        try {
+          const gcsUri = await saveImage(base64String, 'avatar-ref');
+          setConfig(prev => ({ ...prev, referenceImageGcsUri: gcsUri }));
+        } catch (err) {
+          console.warn('[Avatar] Reference image not persisted:', err);
+        }
       };
       reader.readAsDataURL(file);
     }
   };
 
   const clearReferenceImage = () => {
-    setConfig(prev => ({ ...prev, referenceImage: undefined }));
+    setConfig(prev => ({ ...prev, referenceImage: undefined, referenceImageGcsUri: undefined }));
     if (generatedImage && generatedImage === config.referenceImage) {
       setGeneratedImage(null);
       if (onImageGenerated) onImageGenerated('');
@@ -240,9 +296,10 @@ const AvatarGenerator: React.FC<AvatarGeneratorProps> = ({ externalConfig, setEx
             <label className="block text-sm font-bold text-gray-300 mb-2">
               {config.referenceImage ? 'Avatar Description (Action/Pose)' : 'Streamer Appearance'}
             </label>
-            <textarea
+            <TextArea
+              name="appearance"
               value={config.appearance}
-              onChange={(e) => setConfig({ ...config, appearance: e.target.value })}
+              onCommit={handleConfigCommit}
               placeholder={config.referenceImage
                 ? "Describe what they are doing, e.g. Holding a mobile phone, wearing headphones, looking excited."
                 : "Female asian gamer in her 20s with blonde hair"}
@@ -253,9 +310,10 @@ const AvatarGenerator: React.FC<AvatarGeneratorProps> = ({ externalConfig, setEx
 
           <div>
             <label className="block text-sm font-bold text-gray-300 mb-2">Background Setting</label>
-            <textarea
+            <TextArea
+              name="setting"
               value={config.setting}
-              onChange={(e) => setConfig({ ...config, setting: e.target.value })}
+              onCommit={handleConfigCommit}
               placeholder="Dark futuristic gamer room"
               rows={3}
               className="w-full bg-[#2D2D2D] border border-gray-600 rounded-lg px-4 py-3 text-white focus:ring-2 focus:ring-google-blue focus:border-transparent outline-none transition-all resize-none placeholder-gray-500"
@@ -302,6 +360,51 @@ const AvatarGenerator: React.FC<AvatarGeneratorProps> = ({ externalConfig, setEx
               {isLoading ? 'Generating...' : 'Generate Avatar'}
             </NeonButton>
           </div>
+
+          {avatarHistory.length > 0 && (
+            <div className="pt-2">
+              <div className="flex items-baseline justify-between mb-2">
+                <label className="block text-sm font-bold text-gray-300">
+                  Avatars in this project
+                </label>
+                <span className="text-[10px] text-gray-500">
+                  {avatarHistory.length} saved · click to reuse (no new generation charge)
+                </span>
+              </div>
+              <ul className="flex gap-2 overflow-x-auto pb-2">
+                {avatarHistory.map((entry) => {
+                  const isCurrent = entry.gcsUri === currentAvatarGcsUri;
+                  return (
+                    <li key={entry.gcsUri} className="shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => handleReuseAvatar(entry)}
+                        disabled={isLoading}
+                        title={entry.prompt || 'Generated avatar'}
+                        aria-label={`Reuse avatar: ${entry.prompt || 'generated avatar'}`}
+                        className={`block rounded-lg overflow-hidden border-2 transition-all disabled:opacity-50 ${
+                          isCurrent
+                            ? 'border-google-blue'
+                            : 'border-gray-700 hover:border-gray-400'
+                        }`}
+                      >
+                        <GcsImage
+                          gcsUri={entry.gcsUri}
+                          alt={entry.prompt || 'Generated avatar'}
+                          className={entry.aspectRatio === '9:16' ? 'h-20 w-[45px] object-cover' : 'h-20 w-[142px] object-cover'}
+                          fallbackClassName={entry.aspectRatio === '9:16' ? 'h-20 w-[45px]' : 'h-20 w-[142px]'}
+                        />
+                      </button>
+                      <p className="text-[9px] text-gray-500 text-center mt-1">
+                        {entry.aspectRatio || ''}
+                        {isCurrent ? ' · in use' : ''}
+                      </p>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )}
 
           {error && (
             <div className="p-4 bg-red-900/20 border border-red-900/50 text-red-300 rounded-lg text-sm text-center">

@@ -114,6 +114,41 @@ const AUTHORIZED_USERS = (process.env.AUTHORIZED_USERS || '')
     .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
 const AUTHORIZED_DOMAIN = (process.env.AUTHORIZED_DOMAIN || '').trim().toLowerCase();
 
+// --- ADMIN AUTHORIZATION ---
+// Explicit admin allowlist. If unset, fall back to AUTHORIZED_USERS (every
+// whitelisted user is an admin — the historical behaviour). If neither is set
+// the app is open to any authenticated identity, so admin access is DENIED
+// rather than left wide open.
+const ADMIN_USERS = (process.env.ADMIN_USERS || '')
+    .split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+
+const adminAllowlist = ADMIN_USERS.length ? ADMIN_USERS : AUTHORIZED_USERS;
+
+const isAdminEmail = (email) => {
+    if (!email) return false;
+    if (!adminAllowlist.length) return false;
+    return adminAllowlist.includes(String(email).trim().toLowerCase());
+};
+
+if (ADMIN_USERS.length) {
+    console.log(`👑 [Auth] Admins: ${ADMIN_USERS.join(', ')}`);
+} else if (AUTHORIZED_USERS.length) {
+    console.log(`👑 [Auth] ADMIN_USERS unset — falling back to AUTHORIZED_USERS for admin access.`);
+} else {
+    console.warn(`⚠️  [Auth] Neither ADMIN_USERS nor AUTHORIZED_USERS is set — /api/admin/* is disabled.`);
+}
+
+// Gate for /api/admin/* — must run after identity has been resolved.
+const adminOnly = (req, res, next) => {
+    if (isAdminEmail(req.userEmail)) return next();
+    console.warn(`[Auth] Admin access denied for ${req.userEmail || 'anonymous'} → ${req.originalUrl}`);
+    return res.status(403).json({
+        error: adminAllowlist.length
+            ? 'Admin access required.'
+            : 'Admin access is disabled. Set ADMIN_USERS to enable the dashboard.'
+    });
+};
+
 if (GOOGLE_CLIENT_ID) {
     console.log(`🔐 [Auth] Google Sign-In enabled. Client ID: ${GOOGLE_CLIENT_ID.slice(0, 12)}...`);
     if (AUTHORIZED_USERS.length) console.log(`   Authorized users: ${AUTHORIZED_USERS.join(', ')}`);
@@ -220,6 +255,291 @@ const googleAuthMiddleware = async (req, res, next) => {
 const apiRouter = express.Router();
 apiRouter.use(googleAuthMiddleware);
 
+// Identity of the caller. Falls back to a browser-generated id so that
+// deployments without any auth still keep each browser's history separate.
+const ownerKeyOf = (req) => {
+    if (req.userEmail) return String(req.userEmail).toLowerCase();
+    const clientId = req.headers['x-gh-user-id'];
+    if (typeof clientId === 'string' && clientId.trim()) return `anon:${clientId.trim()}`;
+    return null;
+};
+
+// GET /api/me — who am I, and am I an admin?
+apiRouter.get('/me', (req, res) => {
+    res.json({
+        email: req.userEmail || null,
+        isAdmin: isAdminEmail(req.userEmail),
+        adminEnabled: adminAllowlist.length > 0,
+    });
+});
+
+// ── PROJECT HISTORY ────────────────────────────────────────────────────────
+// Datastore kind 'Project' — one entity per saved project, scoped to its owner.
+const PROJECT_KIND = 'Project';
+
+// Datastore indexes every property by default and caps indexed values at 1500
+// bytes. `excludeFromIndexes` only accepts explicit leaf paths, so listing the
+// top-level object name does NOT cover nested fields — a base64
+// `avatarConfig.referenceImage` blew up every save with
+// `INVALID_ARGUMENT: The value of property "referenceImage" is longer than 1500 bytes`.
+// The working set is therefore stored as one unindexed JSON string, and only
+// the small fields the history list actually needs stay indexed.
+const PROJECT_PAYLOAD_PROPERTY = 'payload';
+
+// Datastore's hard entity limit is ~1 MiB; stay clear of it.
+const MAX_PAYLOAD_BYTES = 900 * 1024;
+
+// A gs:// URI is at most bucket(63) + a fixed path, so ~200 bytes is generous.
+// This matters because avatarImageGcsUri is client-supplied and gets written to
+// an INDEXED property, where Datastore rejects anything over 1500 bytes — the
+// same failure class that made every save fail when a base64 reference image
+// ended up indexed.
+const MAX_GCS_URI_LENGTH = 500;
+
+const isSaneGcsUri = (value) =>
+    typeof value === 'string' &&
+    value.startsWith('gs://') &&
+    value.length <= MAX_GCS_URI_LENGTH;
+
+/**
+ * Remove data that must never be persisted in Datastore: inline base64 images
+ * and blob/data URLs. They are either huge or meaningless outside the tab that
+ * produced them.
+ */
+const stripHeavyFields = (payload) => {
+    const clone = JSON.parse(JSON.stringify(payload ?? {}));
+
+    if (clone.avatarConfig && typeof clone.avatarConfig === 'object') {
+        // The inline base64 goes; the gs:// URI it was uploaded to stays, so a
+        // restored project can put the reference image back.
+        delete clone.avatarConfig.referenceImage;
+    }
+    if (Array.isArray(clone.avatarHistory)) {
+        clone.avatarHistory = clone.avatarHistory
+            .filter(a => a && isSaneGcsUri(a.gcsUri))
+            .slice(0, 24)
+            .map(a => ({
+                gcsUri: a.gcsUri,
+                prompt: typeof a.prompt === 'string' ? a.prompt.slice(0, 500) : '',
+                aspectRatio: a.aspectRatio || null,
+                createdAt: a.createdAt || null,
+            }));
+    }
+    if (clone.avatarImageGcsUri !== undefined && clone.avatarImageGcsUri !== null
+        && !isSaneGcsUri(clone.avatarImageGcsUri)) {
+        console.warn('[Projects] Dropping implausible avatarImageGcsUri');
+        delete clone.avatarImageGcsUri;
+    }
+    if (clone.avatarConfig && clone.avatarConfig.referenceImageGcsUri !== undefined
+        && !isSaneGcsUri(clone.avatarConfig.referenceImageGcsUri)) {
+        delete clone.avatarConfig.referenceImageGcsUri;
+    }
+    if (Array.isArray(clone.segments)) {
+        clone.segments = clone.segments.map(seg => {
+            const s = { ...seg };
+            delete s.videoUrl;
+            delete s.videoOptions;
+            delete s.isGenerating;
+            delete s.generatedUsingPrevUrl;
+            // A data: URL here means the clip was returned inline and never
+            // reached GCS — it cannot be restored, so don't store megabytes of it.
+            if (s.videoGcsUri !== undefined && !isSaneGcsUri(s.videoGcsUri)) {
+                delete s.videoGcsUri;
+            }
+            if (Array.isArray(s.videoOptionGcsUris)) {
+                s.videoOptionGcsUris = s.videoOptionGcsUris.map(u => (isSaneGcsUri(u) ? u : null));
+            }
+            return s;
+        });
+    }
+    return clone;
+};
+
+const projectToJson = (entity, database) => {
+    const key = entity[database.KEY];
+    let payload = {};
+    try {
+        payload = entity[PROJECT_PAYLOAD_PROPERTY] ? JSON.parse(entity[PROJECT_PAYLOAD_PROPERTY]) : {};
+    } catch (err) {
+        console.warn('[Projects] Corrupt payload, returning empty project body:', err.message);
+    }
+    return {
+        id: String(key.id || key.name),
+        name: entity.name || 'Untitled project',
+        ownerEmail: entity.ownerEmail,
+        gameInfo: payload.gameInfo || null,
+        avatarConfig: payload.avatarConfig || null,
+        scriptText: payload.scriptText || null,
+        segments: payload.segments || [],
+        exports: payload.exports || [],
+        avatarImageGcsUri: payload.avatarImageGcsUri || null,
+        avatarHistory: payload.avatarHistory || [],
+        gameplayFileMeta: payload.gameplayFileMeta || null,
+        createdAt: entity.createdAt ? new Date(entity.createdAt).getTime() : null,
+        updatedAt: entity.updatedAt ? new Date(entity.updatedAt).getTime() : null,
+    };
+};
+
+// GET /api/projects — list the caller's projects, newest first (summaries only)
+apiRouter.get('/projects', async (req, res) => {
+    const owner = ownerKeyOf(req);
+    if (!owner) return res.status(401).json({ error: 'Cannot determine caller identity.' });
+
+    const database = getDb();
+    if (!database) return res.json({ projects: [] });
+
+    try {
+        const query = database.createQuery(PROJECT_KIND).filter('ownerEmail', '=', owner);
+        const [entities] = await database.runQuery(query);
+        const projects = entities
+            .map(e => ({
+                id: String(e[database.KEY].id || e[database.KEY].name),
+                name: e.name || 'Untitled project',
+                gameTitle: e.gameTitle || null,
+                gameUrl: e.gameUrl || null,
+                targetAspectRatio: e.targetAspectRatio || null,
+                layoutType: e.layoutType || null,
+                segmentCount: e.segmentCount || 0,
+                exportCount: e.exportCount || 0,
+                hasScript: Boolean(e.hasScript),
+                hasAvatar: Boolean(e.hasAvatar),
+                avatarImageGcsUri: e.avatarImageGcsUri || null,
+                createdAt: e.createdAt ? new Date(e.createdAt).getTime() : null,
+                updatedAt: e.updatedAt ? new Date(e.updatedAt).getTime() : null,
+            }))
+            .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+            .slice(0, 100);
+        res.json({ projects });
+    } catch (err) {
+        console.error('[Projects] list failed:', err);
+        res.status(500).json({ error: 'Failed to list projects: ' + err.message });
+    }
+});
+
+// GET /api/projects/:id — full project payload (owner only)
+apiRouter.get('/projects/:id', async (req, res) => {
+    const owner = ownerKeyOf(req);
+    if (!owner) return res.status(401).json({ error: 'Cannot determine caller identity.' });
+
+    const database = getDb();
+    if (!database) return res.status(404).json({ error: 'Project not found' });
+
+    try {
+        const key = database.key([PROJECT_KIND, database.int(req.params.id)]);
+        const [entity] = await database.get(key);
+        if (!entity) return res.status(404).json({ error: 'Project not found' });
+        if (entity.ownerEmail !== owner) {
+            console.warn(`[Projects] ${owner} tried to read project owned by ${entity.ownerEmail}`);
+            return res.status(404).json({ error: 'Project not found' });
+        }
+        res.json(projectToJson(entity, database));
+    } catch (err) {
+        console.error('[Projects] get failed:', err);
+        res.status(500).json({ error: 'Failed to load project: ' + err.message });
+    }
+});
+
+// POST /api/projects — create or update. Body: { id?, name, gameInfo, avatarConfig,
+// scriptText, segments, exports, avatarImageGcsUri }
+apiRouter.post('/projects', async (req, res) => {
+    const owner = ownerKeyOf(req);
+    if (!owner) return res.status(401).json({ error: 'Cannot determine caller identity.' });
+
+    const database = getDb();
+    if (!database) return res.status(503).json({ error: 'Datastore unavailable; project not saved.' });
+
+    const { id, name, gameInfo, avatarConfig, scriptText, segments,
+            exports: exportList, avatarImageGcsUri, avatarHistory,
+            gameplayFileMeta } = req.body || {};
+
+    try {
+        const now = new Date();
+        let key;
+        let createdAt = now;
+
+        if (id) {
+            key = database.key([PROJECT_KIND, database.int(id)]);
+            const [existing] = await database.get(key);
+            if (!existing) return res.status(404).json({ error: 'Project not found' });
+            if (existing.ownerEmail !== owner) {
+                console.warn(`[Projects] ${owner} tried to overwrite project owned by ${existing.ownerEmail}`);
+                return res.status(404).json({ error: 'Project not found' });
+            }
+            createdAt = existing.createdAt ? new Date(existing.createdAt) : now;
+        } else {
+            key = database.key([PROJECT_KIND]);
+        }
+
+        const body = stripHeavyFields({
+            gameInfo: gameInfo || null,
+            avatarConfig: avatarConfig || null,
+            scriptText: typeof scriptText === 'string' ? scriptText : null,
+            segments: Array.isArray(segments) ? segments : [],
+            exports: Array.isArray(exportList) ? exportList : [],
+            avatarImageGcsUri: avatarImageGcsUri || null,
+            avatarHistory: Array.isArray(avatarHistory) ? avatarHistory : [],
+            gameplayFileMeta: gameplayFileMeta || null,
+        });
+
+        const payload = JSON.stringify(body);
+        if (Buffer.byteLength(payload, 'utf8') > MAX_PAYLOAD_BYTES) {
+            return res.status(413).json({
+                error: 'Project is too large to save. Try trimming the script or the number of clips.'
+            });
+        }
+
+        const data = {
+            ownerEmail: owner,
+            name: (typeof name === 'string' && name.trim()) ? name.trim().slice(0, 200) : 'Untitled project',
+            // Indexed summary fields for the history list. Truncated so they can
+            // never trip the 1500-byte index limit.
+            gameTitle: (body.gameInfo?.title || '').slice(0, 300) || null,
+            gameUrl: (body.gameInfo?.url || '').slice(0, 500) || null,
+            targetAspectRatio: body.gameInfo?.targetAspectRatio || null,
+            layoutType: body.gameInfo?.layoutType || null,
+            segmentCount: body.segments.length,
+            exportCount: body.exports.length,
+            hasScript: Boolean(body.scriptText),
+            hasAvatar: Boolean(body.avatarImageGcsUri),
+            avatarImageGcsUri: body.avatarImageGcsUri || null,
+            createdAt,
+            updatedAt: now,
+            [PROJECT_PAYLOAD_PROPERTY]: payload,
+        };
+
+        await database.save({ key, data, excludeFromIndexes: [PROJECT_PAYLOAD_PROPERTY] });
+        const savedId = String(key.id || key.name);
+        console.log(`[Projects] Saved ${savedId} for ${owner} (${Buffer.byteLength(payload, 'utf8')} bytes)`);
+        res.json({ id: savedId, updatedAt: now.getTime(), createdAt: createdAt.getTime() });
+    } catch (err) {
+        console.error('[Projects] save failed:', err);
+        res.status(500).json({ error: 'Failed to save project: ' + err.message });
+    }
+});
+
+// DELETE /api/projects/:id — owner only
+apiRouter.delete('/projects/:id', async (req, res) => {
+    const owner = ownerKeyOf(req);
+    if (!owner) return res.status(401).json({ error: 'Cannot determine caller identity.' });
+
+    const database = getDb();
+    if (!database) return res.status(503).json({ error: 'Datastore unavailable.' });
+
+    try {
+        const key = database.key([PROJECT_KIND, database.int(req.params.id)]);
+        const [entity] = await database.get(key);
+        if (!entity) return res.status(404).json({ error: 'Project not found' });
+        if (entity.ownerEmail !== owner) {
+            return res.status(404).json({ error: 'Project not found' });
+        }
+        await database.delete(key);
+        res.json({ deleted: true });
+    } catch (err) {
+        console.error('[Projects] delete failed:', err);
+        res.status(500).json({ error: 'Failed to delete project: ' + err.message });
+    }
+});
+
 apiRouter.post('/log', async (req, res) => {
     const entry = {
         ...req.body,
@@ -256,7 +576,7 @@ apiRouter.post('/log', async (req, res) => {
     }
 });
 
-apiRouter.get('/admin/stats', async (req, res) => {
+apiRouter.get('/admin/stats', adminOnly, async (req, res) => {
     const database = getDb();
     const startTimeStr = req.query.from;
     const endTimeStr = req.query.to;
@@ -482,9 +802,91 @@ const copyVideoToBucket = async (sourceUri) => {
     return destUri;
 };
 
+/**
+ * Persist an image (data: URL or raw base64) to the customer bucket.
+ * Used for generated avatars and for user-supplied reference images, so that a
+ * restored project can put the streamer back on screen instead of forcing a
+ * paid regeneration. Best-effort: returns null instead of throwing.
+ */
+const uploadImageToBucket = async ({ dataUrl, base64, mimeType = 'image/png', label = 'image', prefix = 'avatars' }) => {
+    if (!GCS_BUCKET_NAME) {
+        console.log('[GCS] No bucket configured — image not persisted.');
+        return null;
+    }
+
+    let raw = base64;
+    let mime = mimeType;
+    if (dataUrl) {
+        const m = /^data:([^;]+);base64,(.*)$/s.exec(dataUrl);
+        if (!m) {
+            console.warn('[GCS] uploadImageToBucket: unrecognised data URL');
+            return null;
+        }
+        mime = m[1];
+        raw = m[2];
+    }
+    if (!raw) return null;
+
+    const ext = mime.includes('jpeg') || mime.includes('jpg') ? 'jpg'
+              : mime.includes('webp') ? 'webp'
+              : 'png';
+    const now = new Date();
+    const yyyy = now.getUTCFullYear();
+    const mm = String(now.getUTCMonth() + 1).padStart(2, '0');
+    const safeLabel = String(label).replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 40) || 'image';
+    const objectName = `${prefix}/${yyyy}/${mm}/${safeLabel}-${now.getTime()}-${randomUUID().slice(0, 8)}.${ext}`;
+
+    try {
+        await getStorage().bucket(GCS_BUCKET_NAME).file(objectName).save(Buffer.from(raw, 'base64'), {
+            contentType: mime,
+            resumable: false,
+        });
+        const uri = `gs://${GCS_BUCKET_NAME}/${objectName}`;
+        console.log(`[GCS] Image saved to ${uri}`);
+        return uri;
+    } catch (err) {
+        console.error('[GCS] Failed to persist image:', err.message);
+        return null;
+    }
+};
+
+/**
+ * Persist a finished export (stitched / composited / subtitled video) to the
+ * customer bucket under exports/YYYY/MM/. Returns the gs:// URI, or null when
+ * no bucket is configured or the upload fails — callers must stay best-effort
+ * so a storage hiccup never costs the user their render.
+ */
+const uploadExportToBucket = async ({ localPath, buffer, ext = 'mp4', contentType = 'video/mp4', label = 'export' }) => {
+    if (!GCS_BUCKET_NAME) {
+        console.log('[GCS] No bucket configured — export not persisted.');
+        return null;
+    }
+    const now = new Date();
+    const yyyy = now.getUTCFullYear();
+    const mm = String(now.getUTCMonth() + 1).padStart(2, '0');
+    const objectName = `exports/${yyyy}/${mm}/${label}-${now.getTime()}-${randomUUID().slice(0, 8)}.${ext}`;
+
+    try {
+        const bucket = getStorage().bucket(GCS_BUCKET_NAME);
+        if (localPath) {
+            await bucket.upload(localPath, { destination: objectName, contentType, resumable: false });
+        } else if (buffer) {
+            await bucket.file(objectName).save(buffer, { contentType, resumable: false });
+        } else {
+            throw new Error('uploadExportToBucket requires localPath or buffer');
+        }
+        const uri = `gs://${GCS_BUCKET_NAME}/${objectName}`;
+        console.log(`[GCS] Export saved to ${uri}`);
+        return uri;
+    } catch (err) {
+        console.error('[GCS] Failed to persist export:', err.message);
+        return null;
+    }
+};
+
 // GET /api/admin/signed-url?uri=gs://bucket/path/file
 // Returns a short-lived signed URL for a GCS object (admin only)
-apiRouter.get('/admin/signed-url', async (req, res) => {
+apiRouter.get('/admin/signed-url', adminOnly, async (req, res) => {
     const { uri } = req.query;
     if (!uri || !uri.startsWith('gs://')) {
         return res.status(400).json({ error: 'Invalid or missing gs:// uri' });
@@ -494,6 +896,13 @@ apiRouter.get('/admin/signed-url', async (req, res) => {
         const slashIdx = withoutScheme.indexOf('/');
         if (slashIdx === -1) return res.status(400).json({ error: 'Invalid GCS URI' });
         const bucketName = withoutScheme.slice(0, slashIdx);
+
+        // Only ever sign objects in this app's own bucket. Without this check the
+        // endpoint can mint read URLs for any object the service account can see.
+        if (!GCS_BUCKET_NAME || bucketName !== GCS_BUCKET_NAME) {
+            console.warn(`[Admin] signed-url refused for foreign bucket: ${bucketName}`);
+            return res.status(403).json({ error: 'URI is outside the configured application bucket.' });
+        }
         const objectName = withoutScheme.slice(slashIdx + 1);
 
         const storage = getStorage();
@@ -658,7 +1067,16 @@ apiRouter.post('/gemini/generate-avatar', async (req, res) => {
         if (response.candidates?.[0]?.content?.parts) {
             for (const part of response.candidates[0].content.parts) {
                 if (part.inlineData) {
-                    return res.json({ imageData: `data:${part.inlineData.mimeType};base64,${part.inlineData.data}` });
+                    const imageData = `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+                    // Persist it: a generated avatar cannot be reproduced, and
+                    // without a durable copy a restored project has no streamer
+                    // and the Studio tab stays locked.
+                    const gcsUri = await uploadImageToBucket({
+                        base64: part.inlineData.data,
+                        mimeType: part.inlineData.mimeType,
+                        label: 'avatar',
+                    });
+                    return res.json({ imageData, gcsUri });
                 }
             }
         }
@@ -1015,6 +1433,24 @@ const burnSrtIntoVideo = async (inputPath, srt, tmpDir, outputName = 'final.mp4'
     return outputPath;
 };
 
+/**
+ * Stream a finished file to the client and resolve only once the response is
+ * fully flushed. The caller can then safely delete the temp directory — piping
+ * alone returns immediately and the old code raced the cleanup.
+ */
+const streamFileToResponse = (filePath, res) => new Promise((resolve) => {
+    const stream = createReadStream(filePath);
+    stream.on('error', (err) => {
+        console.error('[Stream] Read error:', err.message);
+        if (!res.headersSent) res.status(500).end();
+        else res.end();
+        resolve();
+    });
+    res.on('close', resolve);
+    res.on('finish', resolve);
+    stream.pipe(res);
+});
+
 apiRouter.post('/gemini/stitch-clips', upload.any(), async (req, res) => {
     const files = (req.files || []).filter(f => f.fieldname === 'clips');
     if (files.length === 0) {
@@ -1024,6 +1460,7 @@ apiRouter.post('/gemini/stitch-clips', upload.any(), async (req, res) => {
     const subtitleSrt = (req.body && typeof req.body.subtitleSrt === 'string')
         ? req.body.subtitleSrt.trim()
         : '';
+    const saveToGcs = String(req.body?.saveToGcs || '') === 'true';
 
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), 'stitch-'));
     try {
@@ -1053,20 +1490,32 @@ apiRouter.post('/gemini/stitch-clips', upload.any(), async (req, res) => {
 
         console.log(`[FFmpeg] Stitched ${files.length} clips → ${concatPath}`);
 
-        // 无字幕：直接流式返回
-        if (!subtitleSrt) {
-            res.setHeader('Content-Type', 'video/mp4');
-            res.setHeader('Content-Disposition', 'attachment; filename="stitched.mp4"');
-            createReadStream(concatPath).pipe(res);
-            return;
+        // 有字幕：按视频尺寸自适应样式，烧入字幕
+        let outPath = concatPath;
+        let downloadName = 'stitched.mp4';
+        if (subtitleSrt) {
+            outPath = await burnSrtIntoVideo(concatPath, subtitleSrt, tmpDir, 'final.mp4');
+            downloadName = 'stitched_subtitled.mp4';
+            console.log(`[Subtitles] Burned subtitles → ${outPath}`);
         }
 
-        // 有字幕：按视频尺寸自适应样式，烧入字幕后再返回
-        const finalPath = await burnSrtIntoVideo(concatPath, subtitleSrt, tmpDir, 'final.mp4');
-        console.log(`[Subtitles] Burned subtitles → ${finalPath}`);
+        // 成品落 GCS（best-effort，失败不影响下载）。必须在写响应头之前完成。
+        if (saveToGcs) {
+            const gcsUri = await uploadExportToBucket({
+                localPath: outPath,
+                ext: 'mp4',
+                contentType: 'video/mp4',
+                label: subtitleSrt ? 'streamer-subtitled' : 'streamer',
+            });
+            if (gcsUri) {
+                res.setHeader('X-Gcs-Uri', gcsUri);
+                res.setHeader('Access-Control-Expose-Headers', 'X-Gcs-Uri');
+            }
+        }
+
         res.setHeader('Content-Type', 'video/mp4');
-        res.setHeader('Content-Disposition', 'attachment; filename="stitched_subtitled.mp4"');
-        createReadStream(finalPath).pipe(res);
+        res.setHeader('Content-Disposition', `attachment; filename="${downloadName}"`);
+        await streamFileToResponse(outPath, res);
     } catch (err) {
         console.error('[FFmpeg] stitch-clips error:', err);
         if (!res.headersSent) {
@@ -1095,6 +1544,7 @@ apiRouter.post('/gemini/burn-subtitles', upload.any(), async (req, res) => {
     if (!srt.trim()) {
         return res.status(400).json({ error: 'srt field is required and non-empty' });
     }
+    const saveToGcs = String(req.body?.saveToGcs || '') === 'true';
 
     const tmpDir = await mkdtemp(path.join(os.tmpdir(), 'burn-'));
 
@@ -1104,9 +1554,23 @@ apiRouter.post('/gemini/burn-subtitles', upload.any(), async (req, res) => {
         await writeFile(inputPath, videoFile.buffer);
 
         const finalPath = await burnSrtIntoVideo(inputPath, srt, tmpDir, 'final.mp4');
+
+        if (saveToGcs) {
+            const gcsUri = await uploadExportToBucket({
+                localPath: finalPath,
+                ext: 'mp4',
+                contentType: 'video/mp4',
+                label: 'mix-subtitled',
+            });
+            if (gcsUri) {
+                res.setHeader('X-Gcs-Uri', gcsUri);
+                res.setHeader('Access-Control-Expose-Headers', 'X-Gcs-Uri');
+            }
+        }
+
         res.setHeader('Content-Type', 'video/mp4');
         res.setHeader('Content-Disposition', 'attachment; filename="subtitled.mp4"');
-        createReadStream(finalPath).pipe(res);
+        await streamFileToResponse(finalPath, res);
     } catch (err) {
         console.error('[FFmpeg] burn-subtitles error:', err);
         if (!res.headersSent) {
@@ -1114,6 +1578,138 @@ apiRouter.post('/gemini/burn-subtitles', upload.any(), async (req, res) => {
         }
     } finally {
         await rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    }
+});
+
+// POST /api/gemini/save-export
+// Body: multipart/form-data
+//   - video: the finished export produced in the browser (Canvas + MediaRecorder
+//     composite). The server never sees this render otherwise, so it has to be
+//     uploaded explicitly to be persisted.
+//   - label: optional short name used in the object path
+// Returns: { gcsUri }
+apiRouter.post('/gemini/save-export', upload.any(), async (req, res) => {
+    const videoFile = (req.files || []).find(f => f.fieldname === 'video');
+    if (!videoFile) {
+        return res.status(400).json({ error: 'No video file provided' });
+    }
+    if (!GCS_BUCKET_NAME) {
+        return res.status(503).json({ error: 'No GCS bucket configured on this deployment.' });
+    }
+
+    const rawLabel = typeof req.body?.label === 'string' ? req.body.label : 'export';
+    const label = rawLabel.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 40) || 'export';
+    const isWebm = Boolean(videoFile.mimetype && videoFile.mimetype.includes('webm'));
+
+    try {
+        const gcsUri = await uploadExportToBucket({
+            buffer: videoFile.buffer,
+            ext: isWebm ? 'webm' : 'mp4',
+            contentType: isWebm ? 'video/webm' : 'video/mp4',
+            label,
+        });
+        if (!gcsUri) return res.status(500).json({ error: 'Upload to GCS failed.' });
+        res.json({ gcsUri });
+    } catch (err) {
+        console.error('[GCS] save-export error:', err);
+        res.status(500).json({ error: 'Failed to save export: ' + err.message });
+    }
+});
+
+// GET /api/media/export-url?uri=gs://appbucket/...
+// Short-lived signed URL for any authenticated user, but ONLY for objects in
+// this deployment's own bucket. Used by <video> preview, which cannot attach an
+// Authorization header to its src.
+apiRouter.get('/media/export-url', async (req, res) => {
+    const { uri } = req.query;
+    if (!uri || typeof uri !== 'string' || !uri.startsWith('gs://')) {
+        return res.status(400).json({ error: 'Invalid or missing gs:// uri' });
+    }
+    const withoutScheme = uri.slice(5);
+    const slashIdx = withoutScheme.indexOf('/');
+    if (slashIdx === -1) return res.status(400).json({ error: 'Invalid GCS URI' });
+    const bucketName = withoutScheme.slice(0, slashIdx);
+    const objectName = withoutScheme.slice(slashIdx + 1);
+
+    if (!GCS_BUCKET_NAME || bucketName !== GCS_BUCKET_NAME) {
+        return res.status(403).json({ error: 'URI is outside the configured application bucket.' });
+    }
+
+    try {
+        const [url] = await getStorage().bucket(bucketName).file(objectName).getSignedUrl({
+            action: 'read',
+            expires: Date.now() + 60 * 60 * 1000, // 1 hour — long enough to watch
+        });
+        res.json({ url });
+    } catch (err) {
+        console.error('[Media] export-url error:', err);
+        res.status(500).json({ error: 'Failed to generate URL: ' + err.message });
+    }
+});
+
+// POST /api/media/save-image
+// Body: { dataUrl: "data:image/png;base64,...", label?: string }
+// Returns: { gcsUri }
+// For images the server did not produce itself — currently the avatar reference
+// image the user picks from disk.
+apiRouter.post('/media/save-image', async (req, res) => {
+    const { dataUrl, label } = req.body || {};
+    if (!dataUrl || typeof dataUrl !== 'string' || !dataUrl.startsWith('data:')) {
+        return res.status(400).json({ error: 'dataUrl (data: URL) is required' });
+    }
+    if (!GCS_BUCKET_NAME) {
+        return res.status(503).json({ error: 'No GCS bucket configured on this deployment.' });
+    }
+    const gcsUri = await uploadImageToBucket({ dataUrl, label: label || 'reference' });
+    if (!gcsUri) return res.status(500).json({ error: 'Upload to GCS failed.' });
+    res.json({ gcsUri });
+});
+
+// GET /api/media/object?uri=gs://appbucket/...
+// Streams an object from this deployment's own bucket, same-origin and
+// authenticated.
+//
+// Why this exists rather than reusing a signed URL: the bucket has no CORS
+// configuration, so a cross-origin `fetch()` of a signed URL is blocked and a
+// <video crossOrigin="anonymous"> will not load at all. Restored clips have to
+// behave exactly like freshly generated ones — playable, fetchable for
+// stitching, and safe to draw on a canvas for last-frame extraction — so the
+// client pulls them through here and wraps them in blob: URLs.
+apiRouter.get('/media/object', async (req, res) => {
+    const { uri } = req.query;
+    if (!uri || typeof uri !== 'string' || !uri.startsWith('gs://')) {
+        return res.status(400).json({ error: 'Invalid or missing gs:// uri' });
+    }
+    const withoutScheme = uri.slice(5);
+    const slashIdx = withoutScheme.indexOf('/');
+    if (slashIdx === -1) return res.status(400).json({ error: 'Invalid GCS URI' });
+    const bucketName = withoutScheme.slice(0, slashIdx);
+    const objectName = withoutScheme.slice(slashIdx + 1);
+
+    if (!GCS_BUCKET_NAME || bucketName !== GCS_BUCKET_NAME) {
+        return res.status(403).json({ error: 'URI is outside the configured application bucket.' });
+    }
+
+    try {
+        const file = getStorage().bucket(bucketName).file(objectName);
+        const [exists] = await file.exists();
+        if (!exists) return res.status(404).json({ error: 'Object not found' });
+
+        const [metadata] = await file.getMetadata();
+        res.setHeader('Content-Type', metadata.contentType || 'application/octet-stream');
+        if (metadata.size) res.setHeader('Content-Length', metadata.size);
+        res.setHeader('Cache-Control', 'private, max-age=300');
+
+        const stream = file.createReadStream();
+        stream.on('error', (err) => {
+            console.error('[Media] object stream error:', err.message);
+            if (!res.headersSent) res.status(500).json({ error: err.message });
+            else res.end();
+        });
+        stream.pipe(res);
+    } catch (err) {
+        console.error('[Media] object error:', err);
+        if (!res.headersSent) res.status(500).json({ error: 'Failed to read object: ' + err.message });
     }
 });
 
