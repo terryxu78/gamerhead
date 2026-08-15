@@ -49,25 +49,35 @@ export interface AvatarConfig {
   gamingDevice?: string;
 }
 
-export interface VeoSegment {
+export interface OmniTake {
+  id: string;
+  videoUrl: string;
+  dialogue: string;
+  prompt: string;
+  createdAt: number;
+}
+
+export interface OmniSegment {
   id: number;
   startTime: string;
   endTime: string;
-  duration: 4 | 6 | 8; // Strict duration options for Veo 3.1 Fast
+  duration: number; // Dynamic duration (3 to 10 seconds)
   prompt: string;
   dialogue: string;
-  // New fields for sequential generation
   videoUrl?: string;
+  takes?: OmniTake[];
+  activeTakeIndex?: number;
   isGenerating?: boolean;
-  generatedAt?: number; // Timestamp to track continuity
-  startingFrame?: 'avatar' | 'continuity'; // New field for user preference
-  videoOptions?: string[];
-  selectedOptionIndex?: number;
+  generatedAt?: number;
+  interactionId?: string;
   generatedUsingPrevUrl?: string;
 }
 
+// Alias for backwards compatibility across components
+export type VeoSegment = OmniSegment;
+
 export interface StudioState {
-    segments: VeoSegment[];
+    segments: OmniSegment[];
     analyzedScript: string | null;
 }
 
@@ -84,3 +94,4 @@ export interface LogEntry {
 export interface AdminStats {
   logs: LogEntry[];
 }
+

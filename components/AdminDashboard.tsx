@@ -309,7 +309,7 @@ const AdminDashboard: React.FC = () => {
                 <Scorecard title="Model Gens" value={stats.totalGenerations} subtext="Total Requests" />
                 <Scorecard title="Scripts" value={stats.scriptCount} subtext="Text Gen" color="text-google-blue" />
                 <Scorecard title="Avatars" value={stats.avatarCount} subtext="Image Gen" color="text-google-yellow" />
-                <Scorecard title="Video Clips" value={stats.videoCount} subtext="Veo Gen" color="text-google-green" />
+                <Scorecard title="Video Clips" value={stats.videoCount} subtext="Omni Gen" color="text-google-green" />
                 <Scorecard title="Users" value={stats.totalUsers} subtext="Active in Range" />
                 <Scorecard title="Gamerheads" value={stats.exportCount} subtext="Videos Produced" color="text-purple-400" />
                 <Scorecard 

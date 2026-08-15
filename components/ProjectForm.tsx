@@ -414,30 +414,6 @@ const ProjectForm: React.FC<ProjectFormProps> = ({
             />
           </div>
 
-          {/* Streamer Dialogue Packing */}
-          <div>
-            <label className="block text-sm font-bold text-gray-300 mb-2">Streamer Dialogue Packing <span className="text-google-red">*</span></label>
-            <p className="text-xs text-gray-500 mb-2">
-                This determines how fast and how much the streamer will speak. Use normal for best results.
-            </p>
-            <div className="flex gap-3">
-                {(['Slow', 'Normal', 'Fast'] as const).map((pacing) => (
-                    <button
-                        key={pacing}
-                        type="button"
-                        onClick={() => setFieldValue('dialoguePacking', pacing)}
-                        disabled={isLoading}
-                        className={`px-6 py-2 rounded-lg text-xs font-semibold border transition-all ${
-                            form.dialoguePacking === pacing
-                            ? 'bg-google-blue/20 border-google-blue text-google-blue font-bold shadow-sm'
-                            : 'bg-[#2D2D2D] border-gray-600 text-gray-400 hover:border-gray-500 hover:text-gray-200'
-                        }`}
-                    >
-                        {pacing}
-                    </button>
-                ))}
-            </div>
-          </div>
 
           {/* Additional Instructions */}
           <div>

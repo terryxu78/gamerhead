@@ -1,4 +1,6 @@
-import 'dotenv/config';
+import dotenv from 'dotenv';
+dotenv.config({ path: '.env.local' });
+dotenv.config();
 import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -362,11 +364,15 @@ apiRouter.get('/admin/stats', async (req, res) => {
 
 const GCP_PROJECT_ID = process.env.GCP_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT;
 const GCP_LOCATION = process.env.GCP_LOCATION || 'us-central1';
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
 
 // Regional client — for text/multimodal Gemini models
 const getVertexAIClient = () => {
+    if (GEMINI_API_KEY) {
+        return new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+    }
     if (!GCP_PROJECT_ID) {
-        throw new Error('GCP_PROJECT_ID / GOOGLE_CLOUD_PROJECT environment variable is not set.');
+        throw new Error('Neither GEMINI_API_KEY nor GCP_PROJECT_ID / GOOGLE_CLOUD_PROJECT environment variable is set.');
     }
     return new GoogleGenAI({
         vertexai: true,
@@ -375,11 +381,13 @@ const getVertexAIClient = () => {
     });
 };
 
-// Veo client — always uses us-central1 regardless of Cloud Run deployment region
-// Veo models are only available in us-central1
+// Veo / Omni regional client
 const getVeoClient = () => {
+    if (GEMINI_API_KEY) {
+        return new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+    }
     if (!GCP_PROJECT_ID) {
-        throw new Error('GCP_PROJECT_ID / GOOGLE_CLOUD_PROJECT environment variable is not set.');
+        throw new Error('Neither GEMINI_API_KEY nor GCP_PROJECT_ID / GOOGLE_CLOUD_PROJECT environment variable is set.');
     }
     return new GoogleGenAI({
         vertexai: true,
@@ -388,10 +396,13 @@ const getVeoClient = () => {
     });
 };
 
-// Global client — required for gemini-3.1-flash-image and Veo models
+// Global client — required for gemini-3.1-flash-image and Omni models
 const getVertexAIGlobalClient = () => {
+    if (GEMINI_API_KEY) {
+        return new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+    }
     if (!GCP_PROJECT_ID) {
-        throw new Error('GCP_PROJECT_ID / GOOGLE_CLOUD_PROJECT environment variable is not set.');
+        throw new Error('Neither GEMINI_API_KEY nor GCP_PROJECT_ID / GOOGLE_CLOUD_PROJECT environment variable is set.');
     }
     return new GoogleGenAI({
         vertexai: true,
@@ -508,12 +519,13 @@ apiRouter.get('/admin/signed-url', async (req, res) => {
     }
 });
 
-// Safety settings for image generation
+// Safety settings: Disable all filters to prevent false positive blocks in gaming reactions
 const SAFETY_SETTINGS_BLOCK_NONE = [
     { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'BLOCK_NONE' },
     { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'BLOCK_NONE' },
     { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'BLOCK_NONE' },
     { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'BLOCK_NONE' },
+    { category: 'HARM_CATEGORY_CIVIC_INTEGRITY', threshold: 'BLOCK_NONE' },
 ];
 
 // POST /api/gemini/generate-script
@@ -527,12 +539,25 @@ apiRouter.post('/gemini/generate-script', async (req, res) => {
         const parts = [{ text: prompt }];
         if (inlineData) parts.push({ inlineData });
 
+        console.log('[Gemini] Generating script with gemini-3.6-flash (searchGrounding:', !!searchGrounding, ')');
         const response = await ai.models.generateContent({
-            model: 'gemini-3.5-flash',
+            model: 'gemini-3.6-flash',
             contents: [{ role: 'user', parts }],
             config: {
-                systemInstruction: 'You are an expert content creator scriptwriter. You must strictly adhere to the provided pacing and word count rules (ranges per segment duration) to generate the script.',
+                systemInstruction: `You are an expert gaming livestreamer director and scriptwriter.
+CRITICAL DIALOGUE DURATION & WORD COUNT RULE:
+Every segment's 'dialogue' MUST contain enough spoken words to match its 'duration' in seconds at a natural speaking rate of 1.8 to 2.2 words per second.
+- 3s segment: 5 to 6 words.
+- 4s segment: 7 to 9 words.
+- 5s segment: 9 to 11 words.
+- 6s segment: 11 to 13 words.
+- 7s segment: 13 to 15 words.
+- 8s segment: 15 to 17 words.
+- 9s segment: 16 to 19 words.
+- 10s segment: 18 to 22 words.
+NEVER produce 1-word or 2-word dialogue (e.g. "Nice!") for long multi-second clips. Always write full, engaging livestreamer commentary sentences.`,
                 responseMimeType: 'application/json',
+                safetySettings: SAFETY_SETTINGS_BLOCK_NONE,
                 responseSchema: {
                     type: Type.ARRAY,
                     items: {
@@ -554,10 +579,9 @@ apiRouter.post('/gemini/generate-script', async (req, res) => {
 
         const rawSegments = JSON.parse(response.text || '[]');
         const validatedSegments = rawSegments.map(seg => {
-            let d = seg.duration;
-            if (d <= 4) d = 4;
-            else if (d <= 6) d = 6;
-            else d = 8;
+            let d = Number(seg.duration) || 6;
+            if (d < 3) d = 3;
+            if (d > 10) d = 10;
             return { ...seg, duration: d };
         });
 
@@ -587,11 +611,13 @@ apiRouter.post('/gemini/analyze-script', async (req, res) => {
 
     try {
         const ai = getVertexAIGlobalClient();
+        console.log('[Gemini] Analyzing script with gemini-3.6-flash');
         const response = await ai.models.generateContent({
-            model: 'gemini-3.5-flash',
+            model: 'gemini-3.6-flash',
             contents: prompt,
             config: {
                 responseMimeType: 'application/json',
+                safetySettings: SAFETY_SETTINGS_BLOCK_NONE,
                 responseSchema: {
                     type: Type.ARRAY,
                     items: {
@@ -612,10 +638,9 @@ apiRouter.post('/gemini/analyze-script', async (req, res) => {
 
         const rawSegments = JSON.parse(response.text || '[]');
         const validatedSegments = rawSegments.map(seg => {
-            let d = seg.duration;
-            if (d <= 4) d = 4;
-            else if (d <= 6) d = 6;
-            else d = 8;
+            let d = Number(seg.duration) || 6;
+            if (d < 3) d = 3;
+            if (d > 10) d = 10;
             return { ...seg, duration: d };
         });
 
@@ -669,160 +694,290 @@ apiRouter.post('/gemini/generate-avatar', async (req, res) => {
     }
 });
 
-// POST /api/gemini/generate-video
-// Body: { prompt, imageBase64, aspectRatio, durationSeconds, model, systemInstruction }
-// Returns: { operationName: string }
-apiRouter.post('/gemini/generate-video', async (req, res) => {
-    const { prompt, imageBase64, aspectRatio, durationSeconds, model, systemInstruction } = req.body;
-    if (!prompt || !imageBase64) return res.status(400).json({ error: 'prompt and imageBase64 are required' });
+// POST /api/gemini/omni-interaction
+// Body: { prompt, goldenAvatarBase64, prevPoseBase64, aspectRatio, previousInteractionId, durationSeconds, task }
+// Returns: { interactionId: string, videoUri?: string, videoBase64?: string }
+apiRouter.post('/gemini/omni-interaction', async (req, res) => {
+    const { 
+        prompt, 
+        goldenAvatarBase64, 
+        prevPoseBase64, 
+        aspectRatio, 
+        durationSeconds 
+    } = req.body;
+
+    if (!prompt) return res.status(400).json({ error: 'prompt is required' });
 
     try {
-        const ai = getVeoClient();  // Veo only available in us-central1
-        const veoModel = model || 'veo-3.1-generate-001';
-        const veoRatio = aspectRatio === '9:16' ? '9:16' : '16:9';
+        const ai = getVertexAIGlobalClient();
 
-        const config = {
-            numberOfVideos: 1,
-            resolution: '720p',
-            aspectRatio: veoRatio,
-            durationSeconds: durationSeconds || 6,
-            personGeneration: 'allow_adult',
+        // 1. Determine starting frame image (<Image0>)
+        // For Shot 1: golden avatar image
+        // For Shot 2+: exact ending pose frame of previous clip (seamless continuity)
+        const sourceImage = prevPoseBase64 || goldenAvatarBase64;
+        if (!sourceImage) return res.status(400).json({ error: 'Starting image is required' });
+
+        const mimeMatch = sourceImage.match(/^data:(image\/[a-z]+);base64,/);
+        const mimeType = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+        const cleanImageData = sourceImage.replace(/^data:image\/[a-z]+;base64,/, '');
+
+        const inputParts = [
+            { type: 'text', text: prompt },
+            {
+                type: 'image',
+                mime_type: mimeType,
+                data: cleanImageData
+            }
+        ];
+
+        const interactionConfig = {
+            model: 'gemini-omni-flash-preview',
+            input: inputParts,
+            response_format: {
+                type: 'video',
+                delivery: 'uri',
+                aspect_ratio: aspectRatio === '9:16' ? '9:16' : '16:9'
+            },
+            generation_config: {
+                video_config: {
+                    task: 'image_to_video'
+                }
+            }
         };
-        if (systemInstruction) config.systemInstruction = systemInstruction;
 
-        const operation = await ai.models.generateVideos({
-            model: veoModel,
-            prompt,
-            image: { imageBytes: imageBase64, mimeType: 'image/png' },
-            config
-        });
-
-        // Return the operation name for client-side polling
-        res.json({ operationName: operation.name });
-    } catch (err) {
-        console.error('[Gemini] generate-video error:', err);
-        res.status(500).json({ error: err.message });
-    }
-});
-
-// GET /api/gemini/video-operation?name=xxx
-// Returns: { done: bool, videoUri?: string, error?: string }
-// NOTE: We use direct REST API here because the SDK's getVideosOperation()
-// requires a SDK-internal Operation object, not a plain { name } object.
-apiRouter.get('/gemini/video-operation', async (req, res) => {
-    const { name } = req.query;
-    if (!name) return res.status(400).json({ error: 'name is required' });
-
-    try {
-        const token = await getAccessToken();
-
-        // Veo operations must be polled via fetchPredictOperation (not standard GET /operations/{id})
-        // name = "projects/.../locations/global/publishers/google/models/veo-xxx/operations/yyy"
-        // Extract model path: "projects/.../locations/global/publishers/google/models/veo-xxx"
-        const modelPathMatch = name.match(/^(.*\/models\/[^/]+)\/operations\//);
-        if (!modelPathMatch) {
-            throw new Error(`Cannot parse operation name: ${name}`);
+        // Only include safety_settings if calling Vertex AI Enterprise Platform
+        if (!GEMINI_API_KEY) {
+            interactionConfig.safety_settings = SAFETY_SETTINGS_BLOCK_NONE;
         }
-        const modelPath = modelPathMatch[1];
-        const fetchOpUrl = `https://us-central1-aiplatform.googleapis.com/v1/${modelPath}:fetchPredictOperation`;
-        console.log(`[Gemini] fetchPredictOperation: ${fetchOpUrl}`);
 
-        const opResp = await fetch(fetchOpUrl, {
-            method: 'POST',
-            headers: {
+        console.log(`[Omni Flash] Generating clip (task: image_to_video, duration: ${durationSeconds || 6}s, ratio: ${aspectRatio || '16:9'}, isContinuity: ${!!prevPoseBase64})...`);
+        
+        let interaction = null;
+        let url, headers;
+        if (GEMINI_API_KEY) {
+            url = `https://generativelanguage.googleapis.com/v1beta/interactions?key=${GEMINI_API_KEY}`;
+            headers = { 'Content-Type': 'application/json' };
+        } else {
+            const token = await getAccessToken();
+            url = `https://aiplatform.googleapis.com/v1beta1/projects/${GCP_PROJECT_ID}/locations/global/interactions`;
+            headers = {
                 'Authorization': `Bearer ${token}`,
                 'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ operationName: name })
-        });
-
-        if (!opResp.ok) {
-            const errText = await opResp.text().catch(() => opResp.statusText);
-            throw new Error(`fetchPredictOperation failed (${opResp.status}): ${errText}`);
+            };
         }
 
-        const operation = await opResp.json();
-        console.log(`[Gemini] Operation status: done=${operation.done}`);
+        const maxAttempts = 3;
+        let lastError = null;
 
-        if (!operation.done) {
-            return res.json({ done: false });
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+                console.log(`[Omni Flash] Generation attempt ${attempt}/${maxAttempts}...`);
+                const resp = await fetch(url, {
+                    method: 'POST',
+                    headers,
+                    body: JSON.stringify(interactionConfig),
+                    signal: AbortSignal.timeout(180000) // 3 minute timeout
+                });
+
+                if (!resp.ok) {
+                    const errText = await resp.text();
+                    // Retry on transient 5xx or rate limit (429) errors
+                    if (resp.status >= 500 || resp.status === 429) {
+                        console.warn(`[Omni Flash] Transient error (${resp.status}): ${errText}. Retrying in ${attempt * 2}s...`);
+                        lastError = new Error(`Interactions API transient error (${resp.status}): ${errText}`);
+                        if (attempt < maxAttempts) {
+                            await new Promise(r => setTimeout(r, attempt * 2000));
+                            continue;
+                        }
+                    }
+                    throw new Error(`Interactions API request failed (${resp.status}): ${errText}`);
+                }
+
+                interaction = await resp.json();
+                break;
+            } catch (err) {
+                lastError = err;
+                const isTransient = err.name === 'TimeoutError' 
+                                 || err.code === 'UND_ERR_HEADERS_TIMEOUT' 
+                                 || err.message?.includes('fetch failed')
+                                 || err.message?.includes('Internal error')
+                                 || err.message?.includes('500');
+
+                if (attempt < maxAttempts && isTransient) {
+                    console.warn(`[Omni Flash] Attempt ${attempt} failed (${err.message}). Retrying in ${attempt * 2}s...`);
+                    await new Promise(r => setTimeout(r, attempt * 2000));
+                    continue;
+                }
+                throw err;
+            }
         }
-        if (operation.error) {
-            return res.json({ done: true, error: operation.error.message || 'Video generation failed' });
+
+        if (!interaction) {
+            throw lastError || new Error('Video generation failed after retries.');
         }
 
-        // Log full response to understand URI structure
-        console.log('[Gemini] Operation response:', JSON.stringify(operation.response));
+        console.log('[Omni Flash] Interaction completed:', interaction?.id || 'ID_N/A');
+        console.log('[Omni Flash] Raw response keys:', Object.keys(interaction || {}));
 
-        // Check for RAI (Responsible AI) content filter — video blocked by safety policy
-        const raiFilteredCount = operation.response?.raiMediaFilteredCount;
-        if (raiFilteredCount && raiFilteredCount > 0) {
-            const reasons = operation.response?.raiMediaFilteredReasons || [];
-            const reason = reasons[0] || 'Content policy violation';
-            console.warn(`[Gemini] Video blocked by RAI filter: ${reason}`);
-            return res.json({ done: true, error: `Video blocked by Vertex AI safety filter. Try rephrasing the prompt. (${reason})` });
+        let videoUri = interaction?.output_video?.uri 
+                    || interaction?.output_video?.gcsUri 
+                    || interaction?.output_video?.gcs_uri
+                    || interaction?.output?.uri
+                    || interaction?.output?.video?.uri
+                    || interaction?.output?.video?.gcsUri
+                    || interaction?.response?.videos?.[0]?.gcsUri 
+                    || interaction?.response?.videos?.[0]?.uri
+                    || null;
+
+        let videoBase64 = interaction?.output_video?.data 
+                       || interaction?.output_video?.bytesBase64Encoded 
+                       || interaction?.output_video?.bytes_base64_encoded
+                       || interaction?.output?.data
+                       || interaction?.output?.video?.data
+                       || interaction?.output?.video?.bytesBase64Encoded
+                       || interaction?.response?.videos?.[0]?.bytesBase64Encoded
+                       || null;
+
+        // Modern Interactions API schema: steps[].content[]
+        if (Array.isArray(interaction?.steps)) {
+            for (const step of interaction.steps) {
+                if (Array.isArray(step.content)) {
+                    for (const item of step.content) {
+                        if (item.type === 'video' || item.mime_type?.startsWith('video/')) {
+                            if (item.uri && !videoUri) videoUri = item.uri;
+                            if (item.data && !videoBase64) videoBase64 = item.data;
+                        }
+                    }
+                }
+            }
         }
 
-        // Try multiple possible response paths for video URI
-        // GenerateVideoResponse uses: response.videos[0].gcsUri
-        const videoUri = operation.response?.videos?.[0]?.gcsUri
-                      || operation.response?.videos?.[0]?.uri
-                      || operation.response?.generatedVideos?.[0]?.video?.uri
-                      || operation.response?.generatedVideos?.[0]?.video?.gcsUri
-                      || operation.response?.generatedSamples?.[0]?.video?.uri
-                      || operation.response?.generatedSamples?.[0]?.video?.gcsUri;
-
-        // Veo may return video bytes directly (bytesBase64Encoded) instead of a GCS URI
-        const videoBase64 = operation.response?.videos?.[0]?.bytesBase64Encoded
-                         || operation.response?.generatedVideos?.[0]?.video?.bytesBase64Encoded
-                         || operation.response?.generatedSamples?.[0]?.video?.bytesBase64Encoded;
-
-        if (!videoUri && !videoBase64) {
-            return res.json({ done: true, error: 'No video URI returned. Response: ' + JSON.stringify(operation.response) });
+        // Legacy schema: outputs[]
+        if (Array.isArray(interaction?.outputs)) {
+            for (const item of interaction.outputs) {
+                if (item.type === 'video' || item.mime_type?.startsWith('video/')) {
+                    if (item.uri && !videoUri) videoUri = item.uri;
+                    if (item.data && !videoBase64) videoBase64 = item.data;
+                }
+            }
         }
 
-        let finalVideoUri = videoUri || null;
+        // If videoUri is returned (e.g. Generative Language files URI), fetch bytes so browser can play without CORS/auth issues
+        if (!videoBase64 && videoUri && videoUri.startsWith('http')) {
+            try {
+                console.log(`[Omni Flash] Fetching video bytes from URI: ${videoUri}`);
+                const fetchUrl = GEMINI_API_KEY && !videoUri.includes('key=')
+                    ? `${videoUri}${videoUri.includes('?') ? '&' : '?'}key=${GEMINI_API_KEY}`
+                    : videoUri;
+                let fetchHeaders = {};
+                if (!GEMINI_API_KEY) {
+                    try {
+                        const token = await getAccessToken();
+                        if (token) fetchHeaders['Authorization'] = `Bearer ${token}`;
+                    } catch (_) {}
+                }
+                const vResp = await fetch(fetchUrl, { headers: fetchHeaders });
+                if (vResp.ok) {
+                    const buf = await vResp.arrayBuffer();
+                    videoBase64 = Buffer.from(buf).toString('base64');
+                    console.log(`[Omni Flash] Downloaded ${buf.byteLength} video bytes.`);
+                } else {
+                    console.warn(`[Omni Flash] Video fetch returned ${vResp.status}`);
+                }
+            } catch (fetchErr) {
+                console.warn('[Omni Flash] Failed to fetch video bytes:', fetchErr.message);
+            }
+        }
 
         if (videoBase64) {
-            // Video returned as raw bytes — upload to customer bucket if configured,
-            // otherwise stream directly to the frontend as a base64 data URL.
             if (GCS_BUCKET_NAME) {
                 try {
-                    console.log(`[GCS] Uploading inline video bytes to customer bucket: ${GCS_BUCKET_NAME}`);
+                    console.log(`[GCS] Uploading Omni Flash video bytes to customer bucket: ${GCS_BUCKET_NAME}`);
                     const objectName = `videos/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp4`;
                     const storage = getStorage();
                     const file = storage.bucket(GCS_BUCKET_NAME).file(objectName);
                     await file.save(Buffer.from(videoBase64, 'base64'), { contentType: 'video/mp4', resumable: false });
-                    finalVideoUri = `gs://${GCS_BUCKET_NAME}/${objectName}`;
-                    console.log(`[GCS] Inline video uploaded to ${finalVideoUri}`);
+                    videoUri = `gs://${GCS_BUCKET_NAME}/${objectName}`;
+                    console.log(`[GCS] Video saved to ${videoUri}`);
                 } catch (uploadErr) {
-                    console.error('[GCS] Failed to upload inline video bytes:', uploadErr.message);
-                    // Fall back: send base64 directly so frontend can still play it
-                    return res.json({ done: true, videoBase64: `data:video/mp4;base64,${videoBase64}` });
+                    console.warn('[GCS] Save to bucket failed, returning direct base64:', uploadErr.message);
                 }
-            } else {
-                // No bucket configured — send base64 directly to frontend
-                console.log('[Gemini] No bucket configured, returning inline video as base64');
-                return res.json({ done: true, videoBase64: `data:video/mp4;base64,${videoBase64}` });
             }
         }
 
-        // If a customer bucket is configured and we have a GCS URI, copy the video there.
-        if (GCS_BUCKET_NAME && finalVideoUri && !finalVideoUri.startsWith(`gs://${GCS_BUCKET_NAME}/`)) {
+        // If videoUri is on a temp Google bucket, copy to customer bucket
+        if (GCS_BUCKET_NAME && videoUri && !videoUri.startsWith(`gs://${GCS_BUCKET_NAME}/`)) {
             try {
-                console.log(`[GCS] Copying video to customer bucket: ${GCS_BUCKET_NAME}`);
-                finalVideoUri = await copyVideoToBucket(finalVideoUri);
+                videoUri = await copyVideoToBucket(videoUri);
             } catch (copyErr) {
-                console.error('[GCS] Failed to copy video to customer bucket, falling back to Veo URI:', copyErr.message);
+                console.warn('[GCS] Copy to customer bucket failed, using direct URI:', copyErr.message);
             }
         }
 
-        res.json({ done: true, videoUri: finalVideoUri });
+        res.json({
+            interactionId: interaction?.id || randomUUID(),
+            videoUri: videoUri || null,
+            videoBase64: videoBase64 ? `data:video/mp4;base64,${videoBase64}` : null
+        });
     } catch (err) {
-        console.error('[Gemini] video-operation error:', err);
+        console.error('[Omni Flash] omni-interaction error:', err);
+        res.status(500).json({ error: err.message || 'Omni Flash generation failed' });
+    }
+});
+
+// POST /api/gemini/director-copilot
+// Body: { instruction: string, currentDialogue: string, currentPrompt: string, gameTitle?: string, streamerTone?: string }
+// Returns: { updatedDialogue: string, updatedPrompt: string, summary: string }
+apiRouter.post('/gemini/director-copilot', async (req, res) => {
+    const { instruction, currentDialogue, currentPrompt, gameTitle, streamerTone } = req.body;
+    if (!instruction) return res.status(400).json({ error: 'instruction is required' });
+
+    try {
+        const ai = getVertexAIGlobalClient();
+        const systemInstruction = `
+You are an expert AI Streamer Director Co-Pilot for GamerHeads.
+Your job is to take a director's instruction (e.g. "React with more shock", "Make it sarcastic", "Whisper like ASMR") and rewrite the streamer's micro-expression action prompt and dialogue.
+
+CRITICAL RULES:
+1. PURE HUMAN ACTION: The 'updatedPrompt' must describe physical micro-expressions and body language only (eyes, jaw, posture, hands). Never describe what is on the game screen.
+2. VOCAL FX: Include expressive vocal brackets (e.g. "[Laughing]", "[Sharp gasp]", "[ASMR whisper]", "[Shouting]") at the start of 'updatedDialogue'.
+3. AUDIO: Strictly spoken dialogue and vocal reactions. No music, no external SFX.
+4. Output raw JSON only with fields: 'updatedDialogue', 'updatedPrompt', 'summary'.
+`;
+
+        const userContent = `
+GAME CONTEXT: ${gameTitle || 'Gameplay Highlight'}
+CURRENT STREAMER ACTION: "${currentPrompt || ''}"
+CURRENT STREAMER DIALOGUE: "${currentDialogue || ''}"
+DIRECTOR INSTRUCTION: "${instruction}"
+`;
+
+        const response = await ai.models.generateContent({
+            model: 'gemini-3.6-flash',
+            contents: userContent,
+            config: {
+                systemInstruction,
+                responseMimeType: 'application/json',
+                responseSchema: {
+                    type: Type.OBJECT,
+                    properties: {
+                        updatedDialogue: { type: Type.STRING },
+                        updatedPrompt: { type: Type.STRING },
+                        summary: { type: Type.STRING }
+                    },
+                    required: ['updatedDialogue', 'updatedPrompt', 'summary']
+                }
+            }
+        });
+
+        const result = JSON.parse(response.text || '{}');
+        res.json(result);
+    } catch (err) {
+        console.error('[Gemini] director-copilot error:', err);
         res.status(500).json({ error: err.message });
     }
 });
+
 
 // GET /api/gemini/download-video?uri=xxx
 // Streams video to client.
@@ -853,11 +1008,21 @@ apiRouter.get('/gemini/download-video', async (req, res) => {
             });
             readStream.pipe(res);
         } else {
-            // Legacy: HTTP URI from Veo temp storage — fetch with Bearer token
-            const token = await getAccessToken();
-            const videoResp = await fetch(uri, {
-                headers: { 'Authorization': `Bearer ${token}` }
-            });
+            // HTTP URI — fetch with GEMINI_API_KEY or Bearer token
+            let fetchUrl = uri;
+            let headers = {};
+            if (GEMINI_API_KEY) {
+                if (!fetchUrl.includes('key=')) {
+                    fetchUrl += (fetchUrl.includes('?') ? '&' : '?') + 'key=' + GEMINI_API_KEY;
+                }
+            } else {
+                try {
+                    const token = await getAccessToken();
+                    if (token) headers['Authorization'] = `Bearer ${token}`;
+                } catch (_) {}
+            }
+
+            const videoResp = await fetch(fetchUrl, { headers });
 
             if (!videoResp.ok) {
                 const errText = await videoResp.text().catch(() => videoResp.statusText);

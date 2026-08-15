@@ -4,7 +4,8 @@ import {
     constructGeneratorPrompt, 
     constructAvatarPrompt,
     constructVeoAnalysisPrompt,
-    constructVeoGenerationPrompt
+    constructVeoGenerationPrompt,
+    constructOmniGenerationPrompt
 } from "./prompts";
 import { compressVideo } from "../utils/videoUtils";
 import { logEvent } from "./logging";
@@ -100,7 +101,7 @@ export const generateStreamerScript = async (
     });
 
     if (onStatusUpdate) onStatusUpdate("Finalizing...", 100);
-    logEvent('script', 'gemini-3.5-flash', 'success');
+    logEvent('script', 'gemini-3.6-flash', 'success');
     return {
       fullText: result.fullText,
       segments: result.segments,
@@ -109,13 +110,13 @@ export const generateStreamerScript = async (
       inlineData: result.inlineData || inlineData
     };
   } catch (error: any) {
-    logEvent('script', 'gemini-3.5-flash', 'failed', { error: error.message });
+    logEvent('script', 'gemini-3.6-flash', 'failed', { error: error.message });
     throw error;
   }
 };
 
 // ---------------------------------------------------------------------------
-// AVATAR IMAGE GENERATION (Nano2 / gemini image model)
+// AVATAR IMAGE GENERATION (gemini-3.1-flash-image)
 // ---------------------------------------------------------------------------
 export const generateStreamerAvatar = async (config: AvatarConfig): Promise<string> => {
   const prompt = constructAvatarPrompt(config);
@@ -150,7 +151,7 @@ export const generateStreamerAvatar = async (config: AvatarConfig): Promise<stri
 };
 
 // ---------------------------------------------------------------------------
-// SCRIPT → VEO SHOT LIST ANALYSIS
+// SCRIPT → OMNI SHOT LIST ANALYSIS
 // ---------------------------------------------------------------------------
 export const analyzeScriptForVeo = async (script: string): Promise<VeoSegment[]> => {
   const prompt = constructVeoAnalysisPrompt(script);
@@ -162,100 +163,69 @@ export const analyzeScriptForVeo = async (script: string): Promise<VeoSegment[]>
       body: JSON.stringify({ prompt })
     });
 
-    logEvent('script', 'gemini-3.5-flash', 'success', { segments: segments.length });
+    logEvent('script', 'gemini-3.6-flash', 'success', { segments: segments.length });
     return segments;
   } catch (error: any) {
-    logEvent('script', 'gemini-3.5-flash', 'failed', { error: error.message });
+    logEvent('script', 'gemini-3.6-flash', 'failed', { error: error.message });
     throw new Error(`Failed to analyze script for video generation: ${error.message}`);
   }
 };
 
 // ---------------------------------------------------------------------------
-// VEO VIDEO CLIP GENERATION
+// GEMINI OMNI FLASH VIDEO & VOCAL FX GENERATION
 // ---------------------------------------------------------------------------
-export const generateVeoClip = async (
+export const generateOmniClip = async (
   prompt: string,
   dialogue: string,
-  imageBase64: string,
+  durationSeconds: number,
+  goldenAvatarBase64: string,
   aspectRatio: '16:9' | '9:16',
-  durationSeconds: 4 | 6 | 8,
-  model: 'veo-3.1-generate-001' | 'veo-3.1-fast-generate-001',
-  signal?: AbortSignal,
-  gamingDevice?: string
-): Promise<string> => {
-  const refinedPrompt = constructVeoGenerationPrompt(prompt, dialogue, durationSeconds, gamingDevice);
+  gamingDevice?: string,
+  prevPoseBase64?: string,
+  previousInteractionId?: string,
+  signal?: AbortSignal
+): Promise<{ videoUrl: string; interactionId: string }> => {
+  const rawGoldenAvatar = goldenAvatarBase64
+    ? (goldenAvatarBase64.includes(',') ? goldenAvatarBase64.split(',')[1] : goldenAvatarBase64)
+    : undefined;
+  const rawPrevPose = prevPoseBase64
+    ? (prevPoseBase64.includes(',') ? prevPoseBase64.split(',')[1] : prevPoseBase64)
+    : undefined;
+
+  const refinedPrompt = constructOmniGenerationPrompt(
+    prompt,
+    dialogue,
+    durationSeconds,
+    gamingDevice,
+    !!rawPrevPose
+  );
 
   if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
 
-  // Step 1: Start video generation — returns operation name
-  let operationName: string;
   try {
-    // Strip data URI prefix from imageBase64 if present
-    const rawImageBase64 = imageBase64.includes(',') ? imageBase64.split(',')[1] : imageBase64;
-
-    const startResult = await apiFetch('/api/gemini/generate-video', {
+    const result = await apiFetch('/api/gemini/omni-interaction', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       signal,
       body: JSON.stringify({
         prompt: refinedPrompt,
-        imageBase64: rawImageBase64,
+        goldenAvatarBase64: rawGoldenAvatar,
+        prevPoseBase64: rawPrevPose,
         aspectRatio,
-        durationSeconds,
-        model
+        durationSeconds
       })
     });
-    operationName = startResult.operationName;
-  } catch (err: any) {
-    if (err.name === 'AbortError') throw err;
-    logEvent('video', model, 'failed', { error: err.message });
-    throw err;
-  }
 
-  // Step 2: Poll for operation completion (max 300 seconds)
-  const MAX_POLL_MS = 300_000;
-  const pollStartTime = Date.now();
-  while (true) {
-    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
-    if (Date.now() - pollStartTime > MAX_POLL_MS) {
-      throw new Error(`Video generation timed out after 300 seconds. The operation may still be running.`);
-    }
-    await new Promise(resolve => setTimeout(resolve, 5000));
-    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+    logEvent('video', 'gemini-omni-flash-preview', 'success', { duration: durationSeconds });
 
-    let pollResult: any;
-    try {
-      pollResult = await apiFetch(
-        `/api/gemini/video-operation?name=${encodeURIComponent(operationName)}`,
-        { signal }
-      );
-    } catch (err: any) {
-      if (err.name === 'AbortError') throw err;
-      logEvent('video', model, 'failed', { error: err.message });
-      throw err;
+    // Handle base64 video data URL directly
+    if (result.videoBase64) {
+      return { videoUrl: result.videoBase64, interactionId: result.interactionId };
     }
 
-    if (!pollResult.done) continue;
-
-    if (pollResult.error) {
-      logEvent('video', model, 'failed', { error: pollResult.error });
-      throw new Error(`Video generation failed: ${pollResult.error}`);
-    }
-
-    // Step 3a: Server returned inline base64 video (no GCS URI)
-    if (pollResult.videoBase64) {
-      logEvent('video', model, 'success', { duration: durationSeconds });
-      return pollResult.videoBase64; // data:video/mp4;base64,... — usable directly in <video src>
-    }
-
-    const videoUri: string = pollResult.videoUri;
-    if (!videoUri) throw new Error("Video generation completed but no URI returned.");
-
-    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
-
-    // Step 3b: Download video through server proxy (uses ADC Bearer token)
-    try {
-      const downloadUrl = `/api/gemini/download-video?uri=${encodeURIComponent(videoUri)}`;
+    // Handle hosted video URI (GCS or Google CDN)
+    if (result.videoUri) {
+      const downloadUrl = `/api/gemini/download-video?uri=${encodeURIComponent(result.videoUri)}`;
       const token = sessionStorage.getItem('gh_id_token');
       const downloadResp = await fetch(downloadUrl, {
         signal,
@@ -266,18 +236,68 @@ export const generateVeoClip = async (
         throw new Error(`Failed to download video (${downloadResp.status}): ${errText}`);
       }
       const blob = await downloadResp.blob();
-      logEvent('video', model, 'success', {
-        duration: durationSeconds,
-        gcsUri: videoUri.startsWith('gs://') ? videoUri : undefined,
-      });
-      return URL.createObjectURL(blob);
-    } catch (err: any) {
-      if (err.name === 'AbortError') throw err;
-      logEvent('video', model, 'failed', { error: err.message });
-      throw new Error(`Download error: ${err.message}`);
+      return {
+        videoUrl: URL.createObjectURL(blob),
+        interactionId: result.interactionId
+      };
     }
+
+    throw new Error('Omni Flash completed but returned no video stream.');
+  } catch (err: any) {
+    if (err.name === 'AbortError') throw err;
+    logEvent('video', 'gemini-omni-flash-preview', 'failed', { error: err.message });
+    throw err;
   }
 };
+
+// Backwards compatibility wrapper for generateVeoClip
+export const generateVeoClip = async (
+  prompt: string,
+  dialogue: string,
+  imageBase64: string,
+  aspectRatio: '16:9' | '9:16',
+  durationSeconds: number,
+  _model?: any,
+  signal?: AbortSignal,
+  gamingDevice?: string,
+  prevPoseBase64?: string,
+  previousInteractionId?: string
+): Promise<string> => {
+  const res = await generateOmniClip(
+    prompt,
+    dialogue,
+    durationSeconds,
+    imageBase64,
+    aspectRatio,
+    gamingDevice,
+    prevPoseBase64,
+    previousInteractionId,
+    signal
+  );
+  return res.videoUrl;
+};
+
+// ---------------------------------------------------------------------------
+// DIRECTOR CO-PILOT (AI Streamer Directing)
+// ---------------------------------------------------------------------------
+export const directWithCoPilot = async (
+  instruction: string,
+  currentDialogue: string,
+  currentPrompt: string,
+  gameTitle?: string
+): Promise<{ updatedDialogue: string; updatedPrompt: string; summary: string }> => {
+  return await apiFetch('/api/gemini/director-copilot', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      instruction,
+      currentDialogue,
+      currentPrompt,
+      gameTitle
+    })
+  });
+};
+
 
 /**
  * Server-side video stitching via FFmpeg.

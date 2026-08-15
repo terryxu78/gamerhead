@@ -1,5 +1,4 @@
-
-import { GameInfo, AvatarConfig, DialoguePacking } from "../types";
+import { GameInfo, AvatarConfig } from "../types";
 
 // --- SHARED CONSTANTS ---
 const BASE_PERSONA = `
@@ -10,60 +9,48 @@ Your vibe is professional yet hype. You are NOT a generic AI assistant.
 CRITICAL PRONOUN RULE: Always use gender-neutral pronouns ('they' or 'them') when referring to the streamer in all descriptions and prompts. Do not use 'he', 'she', 'him', 'his', or 'her'.
 `;
 
-const getStreamerRules = (dialoguePacking: DialoguePacking) => {
-    let wordCountText = '';
-    if (dialoguePacking === 'Slow') {
-        wordCountText = `
-   - **4s Segment**: MUST BE strictly between 8 and 10 words.
-   - **6s Segment**: MUST BE strictly between 12 and 15 words.
-   - **8s Segment**: MUST BE strictly between 17 and 20 words.`;
-    } else if (dialoguePacking === 'Fast') {
-        wordCountText = `
-   - **4s Segment**: MUST BE strictly between 12 and 14 words.
-   - **6s Segment**: MUST BE strictly between 18 and 21 words.
-   - **8s Segment**: MUST BE strictly between 23 and 26 words.`;
-    } else {
-        wordCountText = `
-   - **4s Segment**: MUST BE strictly between 10 and 13 words.
-   - **6s Segment**: MUST BE strictly between 15 and 18 words.
-   - **8s Segment**: MUST BE strictly between 20 and 23 words.`;
-    }
-
+const getStreamerRules = () => {
     return `
-CRITICAL DURATION & PACING RULES:
-1. **TOTAL DURATION**: The sum of all segment durations MUST roughly match the length of the uploaded video.
-2. **ROUNDING**: If the total video duration has milliseconds (e.g., 29.3s or 29.8s), ROUND UP the total target script duration to the nearest second (e.g., 30s) to ensure full coverage.
-3. **SEGMENTATION**: Break the script into chunks of exactly **4, 6, or 8** seconds.
-4. **STRICT WORD COUNT LIMITS**: The generated dialogue for each segment must strictly adhere to the following word count rules based on its duration (pacing is set to '${dialoguePacking}'):
-${wordCountText}
-   - Count the words in your generated 'dialogue' for each segment and ensure they fall exactly within these ranges. Do not exceed the maximum or fall below the minimum.
-   - EXCLUDE TONALITY DESCRIPTORS: Any vocal effects or tone descriptions written in brackets or parentheses (e.g., "[ASMR whisper]", "[Excited and cheery]") MUST NOT be counted towards the word count. Only count the actual spoken words.
-5. **TIMESTAMPS**: You must calculate the cumulative timestamp for each segment (e.g., "00:00", "00:06").
+CRITICAL DURATION & TIMELINE RULES:
+1. **TOTAL DURATION**: The sum of all segment durations MUST EXACTLY EQUATE to the length of the uploaded gameplay video.
+2. **SEGMENTATION**: Break the script into consecutive, natural scene beats of **3 to 10 seconds** each.
+3. **STRICT SPOKEN WORD COUNT MATCHING SEGMENT DURATION**:
+   - Streamer dialogue must be realistically paced at **1.8 to 2.2 words per second** so that the streamer speaks naturally across the full duration of the shot without cutting off or being silent.
+   - You MUST adhere to these exact word targets based on each segment's duration:
+     * 3-second segment: 5 to 6 spoken words.
+     * 4-second segment: 7 to 9 spoken words.
+     * 5-second segment: 9 to 11 spoken words.
+     * 6-second segment: 11 to 13 spoken words.
+     * 7-second segment: 13 to 15 spoken words.
+     * 8-second segment: 15 to 17 spoken words.
+     * 9-second segment: 16 to 19 spoken words.
+     * 10-second segment: 18 to 22 spoken words.
+   - CRITICAL NEGATIVE CONSTRAINT: DO NOT output 1-word or 2-word dialogue (e.g. "Nice!", "Let's go") for long 6-10 second clips! If a clip is 9 seconds long, the streamer MUST speak 16 to 19 words of full, continuous commentary sentences.
+   - EXCLUDE VOCAL FX BRACKETS FROM WORD COUNT: Bracketed direction tags like "[Laughing]", "[Sharp gasp]", "[ASMR whisper]", "[Shouting excitedly]" are voice synthesis directives and are excluded from the spoken word count.
+4. **TIMESTAMPS**: Calculate cumulative timestamps for each segment (e.g. "00:00", "00:06", "00:13").
 
-VISUAL DESCRIPTION RULES (CRITICAL FOR VEO):
+VISUAL DESCRIPTION RULES (STREAMER ACTIONS & MICRO-EXPRESSIONS):
 1. **STREAMER ACTION**: Must be EXTREMELY DETAILED (Micro-Expression Level).
-   - Describe specific facial features: "Eyes wide open," "Jaw dropped," "Bit lip," "Eyebrows furrowed."
-   - Describe body language: "Leans forward aggressively," "Throws head back," "Covers mouth."
+   - Describe specific facial features: "Eyes wide open," "Jaw dropped," "Bit lip," "Eyebrows furrowed," "Grins broadly."
+   - Describe body language: "Leans forward aggressively," "Throws head back in laughter," "Covers mouth in shock."
 
-2. **PURE HUMAN ACTION (NO GAME ELEMENTS)**:
-   - The [Streamer Action] description must be 100% about the human.
+2. **PURE HUMAN ACTION (NO GAME/SCREEN ELEMENTS)**:
+   - The streamer action description must be 100% about the human.
    - **NEVER** mention what is on the screen (e.g. DO NOT say "Reacts to explosion", "Looking at the dragon").
-   - Instead use physical descriptions: "Reacts with shock", "Staring intensely at screen", "Wincing in pain".
+   - Instead use physical descriptions: "Reacts with shock", "Staring intensely ahead", "Wincing in pain".
 
 DIALOGUE & AUDIO RULES:
-1. **VOCAL EFFECTS**: If the user's "Additional Instructions" request a specific tone (e.g. ASMR, Whispering, Shouting, Crying, Sarcastic), you MUST prefix the dialogue with it in brackets.
-   - Example: Streamer Dialogue: "[ASMR whisper] Guys, look at this texture..."
-   - Example: Streamer Dialogue: "[Shouting loudly] No way! No way!"
-   - This allows the video generation model to produce the correct audio style.
+1. **VOCAL FX (VFX)**: You MUST prefix dialogue with expressive vocal cues in brackets when appropriate:
+   - Examples: "[Laughing] No way, they actually pulled that off!", "[Sharp gasp] Look at that health bar!", "[Shouting excitedly] Let's go!", "[ASMR whisper] Watch this sneak attack..."
+   - This directs the AI model's native voice synthesis engine.
 
 FORMATTING RULES:
 1. Refer to the character as 'Streamer'. Use gender-neutral pronouns ('they'/'them') when referring to the streamer. Do not use 'he' or 'she'.
 
-NEGATIVE CONSTRAINTS (DO NOT INCLUDE):
-1. DO NOT describe the streamer turning the phone/screen towards the camera/viewers.
-2. DO NOT mention music, singing, or dancing.
-3. DO NOT describe actions associated with music (e.g. "nodding head to beat").
-4. DO NOT describe any camera movements, zoom, panning, tilting, tracking, or scene transitions. The camera perspective must remain completely static (locked tripod shot).
+NEGATIVE CONSTRAINTS:
+1. DO NOT describe the streamer turning the phone/screen towards camera.
+2. DO NOT mention background music or non-vocal SFX.
+3. Camera perspective remains completely static (locked tripod shot).
 `;
 };
 
@@ -90,8 +77,8 @@ export const constructGeneratorPrompt = (info: GameInfo): string => {
         ? `4. **VIDEO SYNCHRONIZATION**: You have been provided with the gameplay video file. You MUST analyze the video to identify key events, actions, milestones, combat status, victories, or failures occurring at each timestamp. Your commentary [Streamer Dialogue] and physical reactions [Streamer Action] MUST synchronize directly and logically with these specific gameplay visuals in the video.`
         : '';
 
-    const titleInstruction = `5. **GAME TITLE INTRO**: The streamer should naturally mention the Game Title ("${info.title}") in the first shot/segment of the script to introduce the game.`;
-    const ctaInstruction = `6. **CALL TO ACTION (CTA) PLACEMENT**: The streamer **MUST** naturally deliver the Call to Action ("${info.cta}") in the final shot/segment of the script as a closing remark.`;
+    const titleInstruction = `5. **GAME TITLE INTRO**: The streamer should naturally mention the Game Title ("${info.title}") in the first shot/segment of the script to introduce the game at timestamp 00:00.`;
+    const ctaInstruction = `6. **CALL TO ACTION (CTA) PLACEMENT**: The streamer **MUST** naturally deliver the Call to Action ("${info.cta}") in the final shot/segment of the script as the closing remark.`;
     const userInstructionRule = info.additionalInstructions
         ? `7. **USER INSTRUCTIONS ADHERENCE**: You must strictly follow and incorporate the specific instructions regarding the streamer's tone, messaging, gaming style, persona, or any specific features/actions mentioned in the User Instructions: "${info.additionalInstructions}".`
         : '';
@@ -99,7 +86,7 @@ export const constructGeneratorPrompt = (info: GameInfo): string => {
     return `
 ${BASE_PERSONA}
 
-TASK: Create a synchronized gameplay commentary script.
+TASK: Create a synchronized gameplay commentary script using Gemini 3.6 Flash.
 
 PROJECT CONTEXT:
 - Game: "${info.title}"
@@ -110,14 +97,14 @@ PROJECT CONTEXT:
 CRITICAL INSTRUCTION:
 1. **DEVICE AUTHENTICITY**: The user has explicitly selected **${info.gamingDevice}** as the platform.
    - ${deviceInstruction}
-2. If 'User Instructions' imply a specific voice style (ASMR, Screaming, etc), apply it to the [Streamer Dialogue] in brackets.
+2. Apply expressive vocal effects in brackets ([Laughing], [Shouting], [ASMR whisper], [Gasping]) to [Streamer Dialogue].
 ${groundingInstruction}
 ${videoInstruction}
 ${titleInstruction}
 ${ctaInstruction}
 ${userInstructionRule}
 
-${getStreamerRules(info.dialoguePacking)}
+${getStreamerRules()}
 `;
 };
 
@@ -132,132 +119,94 @@ export const constructAvatarPrompt = (config: AvatarConfig): string => {
     if (config.gamingDevice) {
         if (config.gamingDevice === 'Mobile (Vertical)') {
             deviceInstruction = `\n- Action: Streamer is holding and playing a mobile phone vertically (portrait mode). Only back of phone is visible`;
+            negativeExtra = 'No gamepads, no game controllers, no keyboards, no mouse.';
         } else if (config.gamingDevice === 'Mobile (Horizontal)') {
             deviceInstruction = `\n- Action: Streamer is holding and playing a mobile phone horizontally (landscape mode). Only back of phone is visible`;
+            negativeExtra = 'No gamepads, no game controllers, no keyboards, no mouse.';
         } else if (config.gamingDevice === 'PC') {
-            deviceInstruction = `\n- Action: Streamer is using a keyboard and mouse on a desk.`;
+            deviceInstruction = `\n- Setting: Streamer is at a gaming desk setup with keyboard and mouse visible in foreground.`;
+            negativeExtra = 'No handheld game controllers, no mobile phones, no gamepads.';
         } else if (config.gamingDevice === 'Console') {
-            deviceInstruction = `\n- Action: Streamer is holding and playing with a game controller.`;
+            deviceInstruction = `\n- Action: Streamer is holding a gaming controller / gamepad with both hands.`;
+            negativeExtra = 'No mobile phones, no keyboards, no mouse.';
         } else if (config.gamingDevice === 'Hands-free (No device)') {
-            deviceInstruction = `\n- Action: Streamer is completely hands-free. Arms are visible but NOT holding or interacting with any devices. There should be NO device, monitor, or hardware in between them and the camera.`;
-            gazeInstruction = `- Gaze: Streamer is looking DIRECTLY into the camera lens.`;
-            negativeExtra = `, keyboard, mouse, computer, PC, laptop, monitor, monitors, desktop setup, gaming PC, controller, gamepad, phone, mobile device, equipment blocking view`;
+            deviceInstruction = `\n- Setting: Streamer is sitting in their streaming room, hands completely empty and free.`;
+            gazeInstruction = `- Gaze: Streamer looks DIRECTLY into the camera lens with engaging eye contact.`;
+            negativeExtra = 'No controllers, no keyboards, no mouse, no desk blocking view, no phones.';
         }
     }
 
-    return `
-Generate ${hasRef ? "an" : "a photorealistic"} image of a live streamer.
-
-${hasRef ? `
-CRITICAL REFERENCE ADHERENCE:
-1. **CHARACTER**: Strictly follow the facial features, hair, skin tone, and clothing style of the provided reference image. The generated character must look exactly like the reference. However camera angle should follow the 'TECHNICAL SPECS' stated below.
-2. **STYLE**: Adopt the art style (e.g. 3D render, anime, oil painting, photo) of the reference image for the entire composition, including the background.
-3. **OVERRIDES**: Only deviate from the reference image if the "Appearance" or "Setting" descriptions below explicitly request a specific change (e.g. "change hair to blue", "pixel art style").
-` : `
-TECHNICAL SPECS:
-- Render Style: Photo-realistic, ultra details, high res with livestream quality lighting effect.
-`}
-
-TECHNICAL SPECS (CAMERA):
-- Perspective: Wide-angle, direct frontal, slight overhead, shot. Looking down slightly at the streamer.
-- Framing: Close-up. Head and top of shoulders only.
+    if (hasRef) {
+        return `
+Professional gaming livestreamer avatar portrait.
+Photorealistic, cinematic lighting, eye-level framing, medium shot.
+Maintain consistent identity and facial features with the reference image.
+- Appearance: ${config.appearance || 'Consistent with reference persona'}
+- Background: ${config.setting || 'Professional streaming room with warm accent lighting'}
 ${gazeInstruction}
-
-SUBJECT:
-- Appearance: ${config.appearance}
-- Setting: ${config.setting} (Background must be out of focus/depth of field).${deviceInstruction}
-
-NEGATIVE PROMPT (DO NOT INCLUDE):
-- Text, overlays, UI, HUDs, watermarks, microphones covering the face, headphones covering the eyes${negativeExtra}.
+${deviceInstruction}
+High detail, sharp focus, vibrant aesthetic.
+Negative Prompt: Blurry, distorted, low quality, CGI game graphics, animated overlays, cartoonish. ${negativeExtra}
 `;
-};
+    }
 
-// --- VEO SCRIPT ANALYSIS ---
-export const constructVeoAnalysisPrompt = (script: string): string => {
     return `
-You are a video production assistant. Analyze the following streamer script and convert it into a structured list of video segments for Veo generation.
-
-SCRIPT TO ANALYZE:
----
-${script}
----
-
-OUTPUT REQUIREMENTS:
-Return a valid JSON array (no markdown, no code fences, raw JSON only) where each element represents one segment with these exact fields:
-- "id": sequential integer starting at 1
-- "startTime": timestamp string "MM:SS" (e.g. "00:00")
-- "endTime": timestamp string "MM:SS" for when this segment ends
-- "duration": integer, MUST be exactly 4, 6, or 8 (choose the value closest to the actual segment length)
-- "prompt": a detailed visual description of the streamer's physical actions and expressions (NO game/screen references — pure human body language and facial expressions)
-- "dialogue": the exact spoken words for this segment (empty string "" if silent)
-
-CRITICAL RULES:
-1. Every segment duration must be 4, 6, or 8 — no other values allowed.
-2. The "prompt" must describe ONLY the streamer's physical appearance (facial expressions, body language, gestures). NEVER mention what is on-screen or in the game.
-3. Use the STREAMER_RULES from the original script to infer expressions if not explicit.
-4. Total durations should sum to match the full script length.
-5. Output ONLY the raw JSON array. No explanations, no markdown.
-
-Example output format:
-[{"id":1,"startTime":"00:00","endTime":"00:06","duration":6,"prompt":"Streamer leans forward, eyes wide open, jaw slightly dropped in surprise, gripping the controller tightly with both hands.","dialogue":"Oh no way, this is insane!"},{"id":2,"startTime":"00:06","endTime":"00:10","duration":4,"prompt":"Streamer grins broadly, eyebrows raised, nodding head slowly with excitement.","dialogue":"Let's go!"}]
+Professional gaming livestreamer avatar portrait.
+Photorealistic, cinematic lighting, eye-level framing, medium shot.
+- Appearance: ${config.appearance || 'Energetic young adult gamer in modern gaming attire'}
+- Background: ${config.setting || 'Modern streaming room with RGB accent glow and gaming gear'}
+${gazeInstruction}
+${deviceInstruction}
+High detail, sharp focus, vibrant aesthetic.
+Negative Prompt: Blurry, distorted, low quality, CGI game graphics, animated overlays, cartoonish. ${negativeExtra}
 `;
 };
 
-// --- VEO GENERATION (VIDEO CLIPS) ---
+// --- GEMINI OMNI FLASH VIDEO GENERATION ---
+export const constructOmniGenerationPrompt = (
+    visualPrompt: string,
+    dialogue: string,
+    durationSeconds: number,
+    gamingDevice?: string,
+    hasPreviousPose?: boolean
+): string => {
+    let deviceInstruction = 'Streamer is seated at a gaming setup.';
+    let gazeInstruction = 'Streamer looks naturally at the screen / desk.';
+
+    if (gamingDevice === 'Hands-free (No device)') {
+        deviceInstruction = 'Streamer is completely hands-free with empty hands.';
+        gazeInstruction = 'Streamer looks directly into the camera lens with engaging eye contact.';
+    } else if (gamingDevice === 'PC') {
+        deviceInstruction = 'Streamer plays on PC with keyboard and mouse on desk.';
+    } else if (gamingDevice === 'Console') {
+        deviceInstruction = 'Streamer holds a gamepad controller in hands.';
+    } else if (gamingDevice === 'Mobile (Vertical)') {
+        deviceInstruction = 'Streamer holds a smartphone vertically in portrait mode.';
+    } else if (gamingDevice === 'Mobile (Horizontal)') {
+        deviceInstruction = 'Streamer holds a smartphone horizontally in landscape mode.';
+    }
+
+    const hasDialogue = dialogue && dialogue.trim().length > 0;
+    const cleanDialogue = dialogue ? dialogue.replace(/[\r\n]+/g, ' ').trim() : '';
+
+    return `<Image0> is the starting frame. In a single continuous shot with static camera:
+The livestreamer performs: ${visualPrompt}
+${deviceInstruction} ${gazeInstruction}
+${hasDialogue ? `Streamer dialogue: "${cleanDialogue}". Natural speaking motion and lip synchronization.` : `Streamer remains silent.`}
+Duration: ${durationSeconds} seconds.
+Audio guidelines: Streamer spoken voice and vocal reactions only. No background music. No game sound effects. No scene cuts. No camera movement.`;
+};
+
+// Backwards compatibility alias
 export const constructVeoGenerationPrompt = (
     visualPrompt: string,
     dialogue: string,
     durationSeconds: number,
     gamingDevice?: string
 ): string => {
-    const hasDialogue = dialogue && dialogue.trim().length > 0;
+    return constructOmniGenerationPrompt(visualPrompt, dialogue, durationSeconds, gamingDevice, false);
+};
 
-    // Audio instruction
-    // Veo 3.1 can interpret bracketed instructions in the dialogue string itself.
-    const audioPrompt = hasDialogue
-        ? `Streamer says: "${dialogue}". Lip sync matches speech.`
-        : `Streamer is silent. Mouth closed.`;
-
-    let deviceNegatives = '';
-    let deviceStablity = '';
-    let gazeVideoInstruction = '3. STREAMER GAZE: Eyes stay focused on the monitor/mobile phone (below camera).';
-
-    if (gamingDevice === 'Hands-free (No device)') {
-        deviceNegatives = ' No controllers. No keyboard. No mouse. No PC. No laptop. No monitor. No monitors. No desktop setup. No gaming PC. No phone. Streamer hands are completely empty and free. No equipment blocking view.';
-        deviceStablity = '8. HANDS FREE: STREAMER DOES NOT HOLD OR TOUCH ANY DEVICE. NO DEVICES BETWEEN STREAMER AND CAMERA.';
-        gazeVideoInstruction = '3. STREAMER GAZE: Streamer looks DIRECTLY into the camera lens.';
-    } else if (gamingDevice === 'PC') {
-        deviceNegatives = ' No controllers, no gamepad, no mobile phones, no handheld devices.';
-        deviceStablity = '8. PC GAMEPLAY: Streamer interacts with a keyboard and mouse on a desk. They do not hold any game controllers or phones.';
-    } else if (gamingDevice === 'Console') {
-        deviceNegatives = ' No mobile phones, no keyboard, no mouse, no desk blocking the view.';
-        deviceStablity = '8. CONSOLE GAMEPLAY: Streamer holds a standard game controller (gamepad) with both hands.';
-    } else if (gamingDevice === 'Mobile (Vertical)') {
-        deviceNegatives = ' No game controllers, no keyboards, no mouse.';
-        deviceStablity = '8. MOBILE VERTICAL: Streamer holds phone VERTICALLY (Portrait) with both hands. Phone orientation is fixed. No device rotation.';
-    } else if (gamingDevice === 'Mobile (Horizontal)') {
-        deviceNegatives = ' No game controllers, no keyboards, no mouse.';
-        deviceStablity = '8. MOBILE HORIZONTAL: Streamer holds phone HORIZONTALLY (Landscape) with both hands. Phone orientation is fixed. No device rotation.';
-    }
-
-    return `
-    IMAGE-TO-VIDEO GENERATION.
-
-    STRICT TECHNICAL CONSTRAINTS (MUST FOLLOW):
-    1. CAMERA: **TRIPOD SHOT**. LOCKED OFF. ABSOLUTELY NO CAMERA MOVEMENT. NO ZOOM. NO PAN. NO TILT.
-    2. SHOT CONTINUITY: Single continuous take. No cuts.
-    ${gazeVideoInstruction}
-    3. OVERLAYS: No text, no subtitles, no UI.
-    4. AUDIO: ${hasDialogue ? 'Speech only.' : 'Silence.'} NO MUSIC. NO SFX.
-    5. DURATION: Exactly ${durationSeconds} seconds.
-    6. NEGATIVE PROMPT: No gameplay footage. No video game UI. No HUD. No CGI characters next to streamer. No music. No SFX. No camera movements. No scene cuts. No graphics or animations. No camera zoom, no camera panning, no camera tilting, no dolly shots, no crane shots, no tracking shots, no focus pulls.${deviceNegatives}
-    ${deviceStablity}
-
-    SUBJECT:
-    Gaming Streamer. ${visualPrompt}
-
-    DIALOGUE:
-    ${audioPrompt}
-
-    `;
+export const constructVeoAnalysisPrompt = (gameTitle?: string): string => {
+    return `Analyze this gameplay video for Gemini 3.6 Flash commentary. ${gameTitle ? `Game: ${gameTitle}.` : ''} Identify key events, timestamps, combat, actions, and milestones.`;
 };
