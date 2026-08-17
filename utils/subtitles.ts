@@ -21,6 +21,30 @@ const stripVocalCues = (text: string): string =>
     .replace(/\s+/g, ' ')
     .trim();
 
+export interface SubtitleCue {
+  start: number;
+  end: number;
+  text: string;
+}
+
+/**
+ * Build an array of subtitle cues with timestamps in seconds for canvas rendering.
+ */
+export const buildSubtitleCues = (segments: VeoSegment[]): SubtitleCue[] => {
+  const cues: SubtitleCue[] = [];
+  let cursor = 0;
+  for (const seg of segments) {
+    const text = stripVocalCues(seg.dialogue || '');
+    const dur = typeof seg.duration === 'number' ? seg.duration : 0;
+    const start = cursor;
+    const end = cursor + dur;
+    cursor = end;
+    if (!text || dur <= 0) continue;
+    cues.push({ start, end, text });
+  }
+  return cues;
+};
+
 /**
  * Build an SRT from the script's per-segment dialogue and estimated durations.
  * Timing is estimated (not measured from actual audio) but sufficient for

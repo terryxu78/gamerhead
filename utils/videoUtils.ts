@@ -1,5 +1,6 @@
 
 import { LayoutType, TargetAspectRatio, PipPlacement, StackedPlacement } from '../types';
+import { SubtitleCue } from './subtitles';
 
 /**
  * Utility functions for client-side video processing using Canvas and MediaRecorder.
@@ -346,7 +347,8 @@ export const compositePipVideo = async (
   targetRatio: TargetAspectRatio,
   pipPlacement: PipPlacement,
   stackedPlacement: StackedPlacement,
-  onProgress?: (msg: string) => void
+  onProgress?: (msg: string) => void,
+  subtitleCues?: SubtitleCue[]
 ): Promise<Blob> => {
   const gameplayUrl = URL.createObjectURL(gameplayFile);
   
@@ -747,6 +749,58 @@ export const compositePipVideo = async (
       }
       } catch (e) {
           console.warn("Frame draw error (overlay)", e);
+      }
+
+      // Draw Subtitles if provided (Rendered directly onto composite canvas)
+      if (subtitleCues && subtitleCues.length > 0) {
+          const currentTime = bgVideo.currentTime;
+          const activeCue = subtitleCues.find(c => currentTime >= c.start && currentTime <= c.end);
+          if (activeCue) {
+              ctx.save();
+              const fontSize = targetRatio === '9:16' ? Math.round(width * 0.048) : Math.round(height * 0.052);
+              ctx.font = `900 ${fontSize}px "Inter", "Roboto", system-ui, sans-serif`;
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'middle';
+
+              const maxWidth = width * 0.85;
+              const words = activeCue.text.split(' ');
+              const lines: string[] = [];
+              let currentLine = '';
+
+              for (const word of words) {
+                  const testLine = currentLine ? `${currentLine} ${word}` : word;
+                  if (ctx.measureText(testLine).width > maxWidth && currentLine) {
+                      lines.push(currentLine);
+                      currentLine = word;
+                  } else {
+                      currentLine = testLine;
+                  }
+              }
+              if (currentLine) lines.push(currentLine);
+
+              const lineHeight = fontSize * 1.35;
+              const totalHeight = lines.length * lineHeight;
+              
+              // Position subtitle: near bottom for landscape or 9:16 (above bottom edge)
+              const bottomMargin = targetRatio === '9:16' ? height * 0.16 : height * 0.10;
+              const startY = height - bottomMargin - (totalHeight / 2);
+
+              lines.forEach((line, idx) => {
+                  const lineY = startY + (idx * lineHeight);
+                  
+                  // Text stroke (heavy black outline)
+                  ctx.strokeStyle = 'rgba(0, 0, 0, 0.95)';
+                  ctx.lineWidth = Math.max(5, Math.round(fontSize * 0.18));
+                  ctx.lineJoin = 'round';
+                  ctx.miterLimit = 2;
+                  ctx.strokeText(line, width / 2, lineY);
+
+                  // Text fill (crisp high-contrast yellow)
+                  ctx.fillStyle = '#FFE600';
+                  ctx.fillText(line, width / 2, lineY);
+              });
+              ctx.restore();
+          }
       }
 
       animationFrameId = requestAnimationFrame(draw);

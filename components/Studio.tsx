@@ -1,10 +1,10 @@
 import React, { useState, useRef, useCallback } from 'react';
 import NeonButton from './NeonButton';
 import { ScriptResult, AvatarConfig, OmniSegment, OmniTake, LayoutType, TargetAspectRatio, PipPlacement, StackedPlacement } from '../types';
-import { generateOmniClip, stitchClipsServer, burnSubtitlesServer } from '../services/gemini';
+import { generateOmniClip, stitchClipsServer } from '../services/gemini';
 import { compositePipVideo } from '../utils/videoUtils';
 import { logEvent } from '../services/logging';
-import { buildFallbackSrt } from '../utils/subtitles';
+import { buildFallbackSrt, buildSubtitleCues } from '../utils/subtitles';
 
 interface StudioProps {
   scriptResult: ScriptResult | null;
@@ -422,7 +422,8 @@ const Studio: React.FC<StudioProps> = ({
           const stitchedStreamerBlob = await stitchStreamerPromise;
           const stitchedStreamerUrl = URL.createObjectURL(stitchedStreamerBlob);
 
-          setExportProgress("Compositing seamless streamer over gameplay (keep this tab active)...");
+          const subtitleCues = wantsSubtitles ? buildSubtitleCues(segments) : undefined;
+          setExportProgress(wantsSubtitles ? "Compositing video & burning subtitles (keep this tab active)..." : "Compositing seamless streamer over gameplay (keep this tab active)...");
           const compositeBlob = await compositePipVideo(
               gameplayFile,
               stitchedStreamerUrl,
@@ -431,17 +432,12 @@ const Studio: React.FC<StudioProps> = ({
               targetAspectRatio,
               pipPlacement,
               stackedPlacement,
+              undefined,
+              subtitleCues
           );
           URL.revokeObjectURL(stitchedStreamerUrl);
 
-          let finalBlob = compositeBlob;
-
-          if (wantsSubtitles) {
-              const srt = buildFallbackSrt(segments);
-              if (srt.trim()) {
-                  finalBlob = await burnSubtitlesServer(compositeBlob, srt, setExportProgress);
-              }
-          }
+          const finalBlob = compositeBlob;
 
           const ext = finalBlob.type.includes('mp4') ? 'mp4' : 'webm';
           const originalName = gameplayFile.name.substring(0, gameplayFile.name.lastIndexOf('.')) || gameplayFile.name;
