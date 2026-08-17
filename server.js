@@ -741,14 +741,24 @@ apiRouter.post('/gemini/omni-interaction', async (req, res) => {
             }
         ];
 
+        const responseFormat = {
+            type: 'video',
+            aspect_ratio: aspectRatio === '9:16' ? '9:16' : '16:9'
+        };
+
+        if (GCS_BUCKET_NAME) {
+            responseFormat.delivery = 'uri';
+            responseFormat.gcs_uri = `gs://${GCS_BUCKET_NAME}/videos/`;
+        } else if (GEMINI_API_KEY) {
+            responseFormat.delivery = 'uri';
+        } else {
+            responseFormat.delivery = 'inline';
+        }
+
         const interactionConfig = {
             model: 'gemini-omni-flash-preview',
             input: inputParts,
-            response_format: {
-                type: 'video',
-                delivery: 'uri',
-                aspect_ratio: aspectRatio === '9:16' ? '9:16' : '16:9'
-            },
+            response_format: responseFormat,
             generation_config: {
                 video_config: {
                     task: 'image_to_video'
