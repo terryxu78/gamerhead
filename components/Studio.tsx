@@ -54,7 +54,7 @@ const Studio: React.FC<StudioProps> = ({
   const [exportProgress, setExportProgress] = useState<string | null>(null);
   
   // Audio Mix State (Vocal FX only for Streamer)
-  const [audioVolumes, setAudioVolumes] = useState({ streamer: 1.2, gameplay: 0.3 });
+  const [audioVolumes, setAudioVolumes] = useState({ streamer: 1.0, gameplay: 0.45 });
 
   // Generation Mode Selection (Single vs 2 Options)
   const [genMode, setGenMode] = useState<'single' | 'options'>('single');
