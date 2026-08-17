@@ -537,15 +537,6 @@ const SAFETY_SETTINGS_BLOCK_NONE = [
     { category: 'HARM_CATEGORY_CIVIC_INTEGRITY', threshold: 'BLOCK_NONE' },
 ];
 
-// Interactions API requires lowercase threshold strings ('off' or 'block_none')
-const INTERACTIONS_SAFETY_SETTINGS = [
-    { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'off' },
-    { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'off' },
-    { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'off' },
-    { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'off' },
-    { category: 'HARM_CATEGORY_CIVIC_INTEGRITY', threshold: 'off' },
-];
-
 // POST /api/gemini/generate-script
 // Body: { prompt: string, inlineData?: { data: string, mimeType: string }, videoMimeType?: string, searchGrounding?: boolean, gameUrl?: string }
 apiRouter.post('/gemini/generate-script', async (req, res) => {
@@ -764,9 +755,6 @@ apiRouter.post('/gemini/omni-interaction', async (req, res) => {
                 }
             }
         };
-
-        // Apply lowercase safety settings compatible with Interactions API
-        interactionConfig.safety_settings = INTERACTIONS_SAFETY_SETTINGS;
 
         console.log(`[Omni Flash] Generating clip (task: image_to_video, duration: ${durationSeconds || 6}s, ratio: ${aspectRatio || '16:9'}, isContinuity: ${!!prevPoseBase64})...`);
         
