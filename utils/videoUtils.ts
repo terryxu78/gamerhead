@@ -527,8 +527,8 @@ export const compositePipVideo = async (
   const bgGain = audioCtx.createGain();
   const overlayGain = audioCtx.createGain();
 
-  bgGain.gain.value = volumes.gameplay; 
-  overlayGain.gain.value = volumes.streamer;
+  bgGain.gain.value = typeof volumes?.gameplay === 'number' ? volumes.gameplay : 0.3; 
+  overlayGain.gain.value = typeof volumes?.streamer === 'number' ? volumes.streamer : 1.2;
 
   bgSource.connect(bgGain);
   bgGain.connect(dest);

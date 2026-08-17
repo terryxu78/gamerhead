@@ -1,14 +1,14 @@
 # GamerHeads - AI Video Generation App
 
-**GamerHeads** is a web application powered by Google's Vertex AI (Gemini + Veo models) that automates the creation of AI-generated scripts, avatar images, and video clips. Designed for one-command deployment to Google Cloud Run.
+**GamerHeads** is a web application powered by Google's Vertex AI (Gemini Flash-Lite and Gemini Omni models) that automates the creation of AI-generated scripts, avatar images, and video clips with synchronized dialogue and vocal reactions. Designed for one-command deployment to Google Cloud Run.
 
 ---
 
 ## Features
 
-- **AI Script Generation** — Generate video scripts using Gemini models via Vertex AI.
-- **AI Avatar / Image Generation** — Create character images using `gemini-3.1-flash-image` (or configurable model).
-- **AI Video Generation** — Generate video clips using Veo models (default: `veo-3.1-generate and veo-3.1-flash-generate`). Videos are automatically saved to a GCS bucket.
+- **AI Script Generation & Video Analysis** — Generate high-energy livestream scripts and shot breakdowns using `gemini-3.5-flash-lite` via Vertex AI.
+- **AI Avatar / Image Generation** — Create character images using `gemini-3.1-flash-lite-image` (Vertex AI global endpoint).
+- **AI Video & Vocal FX Generation** — Generate synchronized video clips and vocal reactions using `gemini-omni-flash-preview` (Gemini Omni Flash) with seamless scene continuity or original avatar adherence. Videos are automatically saved to a GCS bucket.
 - **Script-Subtitled Export** — Optional checkbox at export time burns SRT subtitles (built from the script dialogue) into the final video.
 - **Admin Dashboard** — Monitor usage across all users:
   - Scorecards: total generations, scripts, avatars, video clips, Gamerhead exports, H:V aspect ratio
@@ -62,7 +62,7 @@ When you select **Mode 1**, the script will:
 5. **Configure IAM permissions automatically** — The Compute Service Account is granted:
    - `roles/storage.objectAdmin` (project-wide + bucket-specific) — read/write GCS objects
    - `roles/iam.serviceAccountTokenCreator` — sign GCS URLs for authenticated file downloads
-   - `roles/aiplatform.user` — call Vertex AI / Veo APIs
+   - `roles/aiplatform.user` — call Vertex AI / Gemini / Omni APIs
    - `roles/datastore.user` — read/write Firestore logs
    - `roles/logging.logWriter`, `roles/monitoring.metricWriter`, `roles/cloudtrace.agent`
 6. **Build and deploy** via Cloud Build (source-based, ~3–5 minutes).
@@ -82,8 +82,9 @@ Each click generates a fresh signed URL, so re-clicking a link always works rega
 ### Model Name Display
 
 Model names in the dashboard strip only the hyphen separator, preserving the vendor prefix:
-- `veo-3.1-fast-generate-001` → `veo 3.1-fast-generate-001`
-- `gemini-3.1-flash` → `gemini 3.1-flash`
+- `gemini-omni-flash-preview` → `gemini omni-flash-preview`
+- `gemini-3.5-flash-lite` → `gemini 3.5-flash-lite`
+- `gemini-3.1-flash-lite-image` → `gemini 3.1-flash-lite-image`
 
 ---
 
@@ -113,6 +114,6 @@ To push new code to an existing deployment without changing any environment vari
 
 ## Architecture Notes
 
-- All AI API calls (Gemini, Veo) are made **server-side** from the Node.js Cloud Run instance using ADC — user browsers never touch the AI APIs directly.
+- All AI API calls (Gemini 3.5 Flash-Lite, Gemini 3.1 Flash-Lite Image, Gemini Omni Flash) are made **server-side** from the Node.js Cloud Run instance using ADC (or optional `GEMINI_API_KEY`) — user browsers never touch the AI APIs directly.
 - Generated videos are proxied through the server or stored to GCS; the GCS bucket is private by default.
 - Firestore (Datastore Mode) is used for logging; no SQL database is required.
