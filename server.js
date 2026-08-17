@@ -557,14 +557,14 @@ apiRouter.post('/gemini/generate-script', async (req, res) => {
                 systemInstruction: `You are an expert gaming livestreamer director and scriptwriter.
 CRITICAL DIALOGUE DURATION & WORD COUNT RULE:
 Every segment's 'dialogue' MUST contain enough spoken words to match its 'duration' in seconds at a natural speaking rate.
-- 3s segment: 7 to 8 words.
-- 4s segment: 9 to 11 words.
-- 5s segment: 11 to 13 words.
-- 6s segment: 13 to 15 words.
-- 7s segment: 15 to 17 words.
-- 8s segment: 17 to 19 words.
-- 9s segment: 18 to 21 words.
-- 10s segment: 20 to 24 words.
+- 3s segment: 5 to 6 words.
+- 4s segment: 7 to 9 words.
+- 5s segment: 9 to 11 words.
+- 6s segment: 11 to 13 words.
+- 7s segment: 13 to 15 words.
+- 8s segment: 15 to 17 words.
+- 9s segment: 16 to 19 words.
+- 10s segment: 18 to 22 words.
 NEVER produce 1-word or 2-word dialogue (e.g. "Nice!") for long multi-second clips. Always write full, engaging livestreamer commentary sentences.`,
                 responseMimeType: 'application/json',
                 safetySettings: SAFETY_SETTINGS_BLOCK_NONE,
