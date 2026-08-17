@@ -396,7 +396,16 @@ const getVeoClient = () => {
     });
 };
 
-// Global client — required for gemini-3.1-flash-image and Omni models
+// Resolves model aliases to their actual Google GenAI / Vertex AI API endpoints
+const resolveModelId = (modelName, defaultModel) => {
+    const m = (modelName || defaultModel || '').trim();
+    // Alias gemini-3.6-flash-lite to the GA endpoint gemini-3.5-flash-lite
+    if (m === 'gemini-3.6-flash-lite') return 'gemini-3.5-flash-lite';
+    if (m === 'gemini-3.1-flash-image') return 'gemini-3.1-flash-lite-image';
+    return m;
+};
+
+// Global client — required for gemini-3.1-flash-lite-image and Omni models
 const getVertexAIGlobalClient = () => {
     if (GEMINI_API_KEY) {
         return new GoogleGenAI({ apiKey: GEMINI_API_KEY });
@@ -539,22 +548,23 @@ apiRouter.post('/gemini/generate-script', async (req, res) => {
         const parts = [{ text: prompt }];
         if (inlineData) parts.push({ inlineData });
 
-        console.log('[Gemini] Generating script with gemini-3.6-flash (searchGrounding:', !!searchGrounding, ')');
+        const modelToUse = resolveModelId(req.body.model, 'gemini-3.5-flash-lite');
+        console.log(`[Gemini] Generating script with ${modelToUse} (searchGrounding:`, !!searchGrounding, ')');
         const response = await ai.models.generateContent({
-            model: 'gemini-3.6-flash',
+            model: modelToUse,
             contents: [{ role: 'user', parts }],
             config: {
                 systemInstruction: `You are an expert gaming livestreamer director and scriptwriter.
 CRITICAL DIALOGUE DURATION & WORD COUNT RULE:
-Every segment's 'dialogue' MUST contain enough spoken words to match its 'duration' in seconds at a natural speaking rate of 1.8 to 2.2 words per second.
-- 3s segment: 5 to 6 words.
-- 4s segment: 7 to 9 words.
-- 5s segment: 9 to 11 words.
-- 6s segment: 11 to 13 words.
-- 7s segment: 13 to 15 words.
-- 8s segment: 15 to 17 words.
-- 9s segment: 16 to 19 words.
-- 10s segment: 18 to 22 words.
+Every segment's 'dialogue' MUST contain enough spoken words to match its 'duration' in seconds at a natural speaking rate.
+- 3s segment: 7 to 8 words.
+- 4s segment: 9 to 11 words.
+- 5s segment: 11 to 13 words.
+- 6s segment: 13 to 15 words.
+- 7s segment: 15 to 17 words.
+- 8s segment: 17 to 19 words.
+- 9s segment: 18 to 21 words.
+- 10s segment: 20 to 24 words.
 NEVER produce 1-word or 2-word dialogue (e.g. "Nice!") for long multi-second clips. Always write full, engaging livestreamer commentary sentences.`,
                 responseMimeType: 'application/json',
                 safetySettings: SAFETY_SETTINGS_BLOCK_NONE,
@@ -611,9 +621,10 @@ apiRouter.post('/gemini/analyze-script', async (req, res) => {
 
     try {
         const ai = getVertexAIGlobalClient();
-        console.log('[Gemini] Analyzing script with gemini-3.6-flash');
+        const modelToUse = resolveModelId(req.body.model, 'gemini-3.5-flash-lite');
+        console.log(`[Gemini] Analyzing script with ${modelToUse}`);
         const response = await ai.models.generateContent({
-            model: 'gemini-3.6-flash',
+            model: modelToUse,
             contents: prompt,
             config: {
                 responseMimeType: 'application/json',
@@ -664,7 +675,7 @@ apiRouter.post('/gemini/generate-avatar', async (req, res) => {
         }
 
         const ai = getVertexAIGlobalClient();   // Image model requires global endpoint
-        const resolvedModel = model || 'gemini-3.1-flash-image';
+        const resolvedModel = resolveModelId(model, 'gemini-3.1-flash-lite-image');
         console.log(`[Gemini] Avatar model: ${resolvedModel} (global endpoint)`);
         const response = await ai.models.generateContent({
             model: resolvedModel,
@@ -952,8 +963,10 @@ CURRENT STREAMER DIALOGUE: "${currentDialogue || ''}"
 DIRECTOR INSTRUCTION: "${instruction}"
 `;
 
+        const modelToUse = resolveModelId(req.body.model, 'gemini-3.5-flash-lite');
+        console.log(`[Gemini] Director Co-Pilot running with ${modelToUse}`);
         const response = await ai.models.generateContent({
-            model: 'gemini-3.6-flash',
+            model: modelToUse,
             contents: userContent,
             config: {
                 systemInstruction,

@@ -45,7 +45,7 @@ export interface AvatarConfig {
   setting: string;
   aspectRatio: '16:9' | '9:16';
   referenceImage?: string; // Base64 string
-  model: 'gemini-3.1-flash-image';
+  model: 'gemini-3.1-flash-lite-image';
   gamingDevice?: string;
 }
 
@@ -71,6 +71,7 @@ export interface OmniSegment {
   generatedAt?: number;
   interactionId?: string;
   generatedUsingPrevUrl?: string;
+  startingFrame?: 'continuity' | 'avatar';
 }
 
 // Alias for backwards compatibility across components

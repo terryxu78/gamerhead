@@ -15,17 +15,17 @@ CRITICAL DURATION & TIMELINE RULES:
 1. **TOTAL DURATION**: The sum of all segment durations MUST EXACTLY EQUATE to the length of the uploaded gameplay video.
 2. **SEGMENTATION**: Break the script into consecutive, natural scene beats of **3 to 10 seconds** each.
 3. **STRICT SPOKEN WORD COUNT MATCHING SEGMENT DURATION**:
-   - Streamer dialogue must be realistically paced at **1.8 to 2.2 words per second** so that the streamer speaks naturally across the full duration of the shot without cutting off or being silent.
+   - Streamer dialogue must be realistically paced so that the streamer speaks naturally across the full duration of the shot without cutting off or being silent.
    - You MUST adhere to these exact word targets based on each segment's duration:
-     * 3-second segment: 5 to 6 spoken words.
-     * 4-second segment: 7 to 9 spoken words.
-     * 5-second segment: 9 to 11 spoken words.
-     * 6-second segment: 11 to 13 spoken words.
-     * 7-second segment: 13 to 15 spoken words.
-     * 8-second segment: 15 to 17 spoken words.
-     * 9-second segment: 16 to 19 spoken words.
-     * 10-second segment: 18 to 22 spoken words.
-   - CRITICAL NEGATIVE CONSTRAINT: DO NOT output 1-word or 2-word dialogue (e.g. "Nice!", "Let's go") for long 6-10 second clips! If a clip is 9 seconds long, the streamer MUST speak 16 to 19 words of full, continuous commentary sentences.
+     * 3-second segment: 7 to 8 spoken words.
+     * 4-second segment: 9 to 11 spoken words.
+     * 5-second segment: 11 to 13 spoken words.
+     * 6-second segment: 13 to 15 spoken words.
+     * 7-second segment: 15 to 17 spoken words.
+     * 8-second segment: 17 to 19 spoken words.
+     * 9-second segment: 18 to 21 spoken words.
+     * 10-second segment: 20 to 24 spoken words.
+   - CRITICAL NEGATIVE CONSTRAINT: DO NOT output 1-word or 2-word dialogue (e.g. "Nice!", "Let's go") for long 6-10 second clips! If a clip is 9 seconds long, the streamer MUST speak 18 to 21 words of full, continuous commentary sentences.
    - EXCLUDE VOCAL FX BRACKETS FROM WORD COUNT: Bracketed direction tags like "[Laughing]", "[Sharp gasp]", "[ASMR whisper]", "[Shouting excitedly]" are voice synthesis directives and are excluded from the spoken word count.
 4. **TIMESTAMPS**: Calculate cumulative timestamps for each segment (e.g. "00:00", "00:06", "00:13").
 

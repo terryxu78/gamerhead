@@ -46,7 +46,7 @@ const GameHeads: React.FC<{ onReset: () => void; currentUser: GoogleUser | null;
       appearance: '',
       setting: '',
       aspectRatio: '16:9',
-      model: 'gemini-3.1-flash-image'  // Vertex AI global endpoint image model
+      model: 'gemini-3.1-flash-lite-image'  // Vertex AI global endpoint image model
   });
   
   const [generatedAvatarImage, setGeneratedAvatarImage] = useState<string | null>(null);
@@ -294,7 +294,7 @@ const GameHeads: React.FC<{ onReset: () => void; currentUser: GoogleUser | null;
                     <h1 className="text-3xl font-black tracking-tight text-white flex items-baseline gap-1.5">
                         <span className="bg-clip-text text-transparent bg-gradient-to-r from-google-blue to-google-green">Gamer</span>
                         <span className="text-white">Heads</span>
-                        <span className="text-[10px] text-gray-500 font-bold ml-1 align-baseline uppercase tracking-wider">v1.5</span>
+                        <span className="text-[10px] text-gray-500 font-bold ml-1 align-baseline uppercase tracking-wider">v1.6</span>
                     </h1>
                     </div>
                     <p className="text-xs sm:text-sm text-gray-400 font-medium mt-1 text-center md:text-left hidden sm:block">
@@ -305,7 +305,7 @@ const GameHeads: React.FC<{ onReset: () => void; currentUser: GoogleUser | null;
             
             <div className="flex items-center gap-4">
                 <span className="text-[10px] font-bold text-google-green bg-green-900/20 px-3 py-1.5 rounded-full border border-green-800 flex items-center gap-1">
-                    ⚡ Powered by Nano Banana & Veo 3.1
+                    ⚡ Powered by Nano Banana and Gemini Omni
                 </span>
                 {currentUser && onSignOut && (
                     <div className="flex items-center gap-2">

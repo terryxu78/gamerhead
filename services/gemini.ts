@@ -101,7 +101,7 @@ export const generateStreamerScript = async (
     });
 
     if (onStatusUpdate) onStatusUpdate("Finalizing...", 100);
-    logEvent('script', 'gemini-3.6-flash', 'success');
+    logEvent('script', 'gemini-3.5-flash-lite', 'success');
     return {
       fullText: result.fullText,
       segments: result.segments,
@@ -110,13 +110,13 @@ export const generateStreamerScript = async (
       inlineData: result.inlineData || inlineData
     };
   } catch (error: any) {
-    logEvent('script', 'gemini-3.6-flash', 'failed', { error: error.message });
+    logEvent('script', 'gemini-3.5-flash-lite', 'failed', { error: error.message });
     throw error;
   }
 };
 
 // ---------------------------------------------------------------------------
-// AVATAR IMAGE GENERATION (gemini-3.1-flash-image)
+// AVATAR IMAGE GENERATION (gemini-3.1-flash-lite-image)
 // ---------------------------------------------------------------------------
 export const generateStreamerAvatar = async (config: AvatarConfig): Promise<string> => {
   const prompt = constructAvatarPrompt(config);
@@ -163,10 +163,10 @@ export const analyzeScriptForVeo = async (script: string): Promise<VeoSegment[]>
       body: JSON.stringify({ prompt })
     });
 
-    logEvent('script', 'gemini-3.6-flash', 'success', { segments: segments.length });
+    logEvent('script', 'gemini-3.5-flash-lite', 'success', { segments: segments.length });
     return segments;
   } catch (error: any) {
-    logEvent('script', 'gemini-3.6-flash', 'failed', { error: error.message });
+    logEvent('script', 'gemini-3.5-flash-lite', 'failed', { error: error.message });
     throw new Error(`Failed to analyze script for video generation: ${error.message}`);
   }
 };

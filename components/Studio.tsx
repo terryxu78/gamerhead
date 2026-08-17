@@ -133,16 +133,18 @@ const Studio: React.FC<StudioProps> = ({
         return;
     }
 
-    // Seamless One-Take Logic:
-    // Shot 0: Starts with Avatar Image
-    // Shot > 0: Starts with Ending Pose Frame of previous shot (0.000% jump cuts)
-    let prevPoseBase64: string | undefined = undefined;
+    // Determine Start Frame Strategy:
+    // Shot 0: Always uses Original Avatar (Golden Anchor)
+    // Shot > 0: User preference (defaults to 'continuity' / Prev Clip)
+    const strategy = index === 0 ? 'avatar' : (segments[index].startingFrame || 'continuity');
     const prevSegment = index > 0 ? segments[index - 1] : null;
     const prevUrl = prevSegment?.videoUrl || null;
 
-    if (index > 0) {
+    let prevPoseBase64: string | undefined = undefined;
+
+    if (strategy === 'continuity') {
         if (!prevSegment || !prevUrl) {
-            setError(`Cannot generate Shot ${index + 1}. Please generate Shot ${index} first.`);
+            setError(`Cannot generate Shot ${index + 1}. Previous clip video is missing (Required for scene continuity).`);
             abortControllerRef.current = null;
             return;
         }
@@ -224,7 +226,7 @@ const Studio: React.FC<StudioProps> = ({
                     takes: combinedTakes,
                     activeTakeIndex: combinedTakes.length - 2, // Selected option 1 by default
                     generatedAt: Date.now(),
-                    generatedUsingPrevUrl: prevSegment?.videoUrl || undefined,
+                    generatedUsingPrevUrl: strategy === 'continuity' ? (prevSegment?.videoUrl || undefined) : undefined,
                     interactionId: res1.interactionId,
                     isGenerating: false
                 };
@@ -261,7 +263,7 @@ const Studio: React.FC<StudioProps> = ({
                     takes: combinedTakes,
                     activeTakeIndex: combinedTakes.length - 1,
                     generatedAt: Date.now(),
-                    generatedUsingPrevUrl: prevSegment?.videoUrl || undefined,
+                    generatedUsingPrevUrl: strategy === 'continuity' ? (prevSegment?.videoUrl || undefined) : undefined,
                     interactionId: res.interactionId,
                     isGenerating: false
                 };
@@ -330,6 +332,14 @@ const Studio: React.FC<StudioProps> = ({
       setSegments(prev => {
           const newSegs = [...prev];
           newSegs[index] = { ...newSegs[index], [field]: value };
+          return newSegs;
+      });
+  };
+
+  const updateSegmentStrategy = (index: number, strategy: 'continuity' | 'avatar') => {
+      setSegments(prev => {
+          const newSegs = [...prev];
+          newSegs[index] = { ...newSegs[index], startingFrame: strategy };
           return newSegs;
       });
   };
@@ -483,7 +493,7 @@ const Studio: React.FC<StudioProps> = ({
              )}
            </div>
            <h2 className="text-2xl font-bold text-white mb-4">
-               {isLoading ? 'Analyzing Video with Gemini 3.6 Flash...' : 'Ready for Production'}
+               {isLoading ? 'Analyzing Video with Gemini 3.5 Flash-Lite...' : 'Ready for Production'}
            </h2>
            <p className="text-gray-400 max-w-lg mb-6">
              {isLoading 
@@ -492,7 +502,7 @@ const Studio: React.FC<StudioProps> = ({
            </p>
            {isLoading && (
                <p className="text-xs text-google-yellow mb-8 animate-pulse font-bold">
-                   ⚡ Powered by Gemini 3.6 Flash & Gemini Omni Flash. Keep this tab active.
+                   ⚡ Powered by Gemini 3.5 Flash-Lite & Gemini Omni Flash. Keep this tab active.
                </p>
            )}
            {!isLoading && (
@@ -531,9 +541,6 @@ const Studio: React.FC<StudioProps> = ({
                  <span className="text-xs bg-gray-800 text-gray-300 px-2.5 py-1 rounded border border-gray-700">Layout: {layoutType}</span>
                  <span className="text-xs bg-gray-800 text-green-400 font-mono px-2.5 py-1 rounded border border-gray-700">
                      Total Timeline: {totalDuration}s
-                 </span>
-                 <span className="text-xs bg-gray-800 text-yellow-300 px-2.5 py-1 rounded border border-gray-700 flex items-center gap-1">
-                     🔒 Audio: Vocal FX (VFX) Only
                  </span>
              </div>
              {scriptResult?.groundingUrls && scriptResult.groundingUrls.length > 0 && (
@@ -635,9 +642,11 @@ const Studio: React.FC<StudioProps> = ({
             {/* Shots List */}
             <div className="space-y-6">
                 {segments.map((seg, idx) => {
-                    const prevHasVideo = idx === 0 ? true : !!segments[idx-1].videoUrl;
+                    const strategy = idx === 0 ? 'avatar' : (seg.startingFrame || 'continuity');
+                    const needsPrevious = strategy === 'continuity';
+                    const prevHasVideo = needsPrevious ? !!segments[idx-1]?.videoUrl : true;
                     const canGenerate = prevHasVideo && !seg.isGenerating;
-                    const isStale = idx > 0 && !!seg.videoUrl && seg.generatedUsingPrevUrl !== segments[idx-1].videoUrl;
+                    const isStale = needsPrevious && !!seg.videoUrl && seg.generatedUsingPrevUrl !== segments[idx-1]?.videoUrl;
                     
                     return (
                         <div key={idx} className={`bg-google-surface border rounded-2xl overflow-hidden shadow-card transition-shadow hover:shadow-card-hover ${isStale ? 'border-orange-500/50' : 'border-gray-700'}`}>
@@ -703,10 +712,47 @@ const Studio: React.FC<StudioProps> = ({
                                 </div>
 
                                 {/* Center: Generate Action Area */}
-                                <div className="lg:col-span-2 bg-[#2D2D2D] flex flex-col items-center justify-center p-4 border-b lg:border-b-0 lg:border-r border-gray-700 gap-4">
-                                    <div className="text-[10px] uppercase font-bold text-gray-400 text-center tracking-wider">
-                                        {idx === 0 ? 'Golden Anchor' : 'Seamless Motion'}
-                                    </div>
+                                <div className="lg:col-span-2 bg-[#2D2D2D] flex flex-col items-center justify-center p-4 border-b lg:border-b-0 lg:border-r border-gray-700 gap-3">
+                                    {idx === 0 ? (
+                                        <div className="text-[10px] uppercase font-bold text-gray-400 text-center tracking-wider mb-1">
+                                            Golden Anchor
+                                        </div>
+                                    ) : (
+                                        <div className="w-full mb-1">
+                                            <label className="text-[10px] uppercase font-bold text-gray-400 mb-1.5 block text-center tracking-wider">
+                                                Start Image
+                                            </label>
+                                            <div className="flex bg-black/40 p-1 rounded-lg border border-gray-700">
+                                                <button 
+                                                    type="button"
+                                                    onClick={() => updateSegmentStrategy(idx, 'continuity')}
+                                                    className={`flex-1 text-[10px] py-1.5 px-1 rounded-md transition-all font-bold ${
+                                                        strategy === 'continuity' 
+                                                            ? 'bg-google-blue text-gray-950 shadow-sm' 
+                                                            : 'text-gray-400 hover:text-white'
+                                                    }`}
+                                                    title="Use previous clip ending pose for scene continuity (0% jump cuts)"
+                                                >
+                                                    Prev Clip
+                                                </button>
+                                                <button 
+                                                    type="button"
+                                                    onClick={() => updateSegmentStrategy(idx, 'avatar')}
+                                                    className={`flex-1 text-[10px] py-1.5 px-1 rounded-md transition-all font-bold ${
+                                                        strategy === 'avatar' 
+                                                            ? 'bg-google-blue text-gray-950 shadow-sm' 
+                                                            : 'text-gray-400 hover:text-white'
+                                                    }`}
+                                                    title="Use original high-quality avatar image for maximum character fidelity"
+                                                >
+                                                    Original Avatar
+                                                </button>
+                                            </div>
+                                            <p className="text-[9px] text-gray-500 mt-1 text-center leading-tight">
+                                                {strategy === 'continuity' ? '🎬 Scene continuity' : '✨ Max avatar fidelity'}
+                                            </p>
+                                        </div>
+                                    )}
 
                                     {seg.isGenerating ? (
                                         <>
@@ -720,8 +766,8 @@ const Studio: React.FC<StudioProps> = ({
                                         </>
                                     ) : !seg.videoUrl ? (
                                         <>
-                                            <div className="w-12 h-12 rounded-full bg-google-surface border border-gray-600 shadow-sm flex items-center justify-center">
-                                                <span className="text-xl text-gray-400">⚡</span>
+                                            <div className="w-10 h-10 rounded-full bg-google-surface border border-gray-600 shadow-sm flex items-center justify-center">
+                                                <span className="text-lg text-gray-400">⚡</span>
                                             </div>
                                             <NeonButton
                                                 onClick={() => handleGenerateSegment(idx)}
@@ -740,8 +786,8 @@ const Studio: React.FC<StudioProps> = ({
                                         </>
                                     ) : (
                                         <>
-                                             <div className="w-12 h-12 rounded-full bg-green-900/30 border border-green-700 flex items-center justify-center">
-                                                <span className="text-xl text-green-400">✅</span>
+                                             <div className="w-10 h-10 rounded-full bg-green-900/30 border border-green-700 flex items-center justify-center">
+                                                <span className="text-lg text-green-400">✅</span>
                                              </div>
                                              <button
                                                  onClick={() => handleGenerateSegment(idx)}
