@@ -493,7 +493,7 @@ const Studio: React.FC<StudioProps> = ({
              )}
            </div>
            <h2 className="text-2xl font-bold text-white mb-4">
-               {isLoading ? 'Analyzing Video with Gemini 3.5 Flash-Lite...' : 'Ready for Production'}
+               {isLoading ? 'Analyzing Video with Gemini 3.6 Flash...' : 'Ready for Production'}
            </h2>
            <p className="text-gray-400 max-w-lg mb-6">
              {isLoading 
@@ -502,7 +502,7 @@ const Studio: React.FC<StudioProps> = ({
            </p>
            {isLoading && (
                <p className="text-xs text-google-yellow mb-8 animate-pulse font-bold">
-                   ⚡ Powered by Gemini 3.5 Flash-Lite & Gemini Omni Flash. Keep this tab active.
+                   ⚡ Powered by Gemini 3.6 Flash & Gemini Omni Flash. Keep this tab active.
                </p>
            )}
            {!isLoading && (

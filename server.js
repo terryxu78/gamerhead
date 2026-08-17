@@ -548,7 +548,7 @@ apiRouter.post('/gemini/generate-script', async (req, res) => {
         const parts = [{ text: prompt }];
         if (inlineData) parts.push({ inlineData });
 
-        const modelToUse = resolveModelId(req.body.model, 'gemini-3.5-flash-lite');
+        const modelToUse = resolveModelId(req.body.model, 'gemini-3.6-flash');
         console.log(`[Gemini] Generating script with ${modelToUse} (searchGrounding:`, !!searchGrounding, ')');
         const response = await ai.models.generateContent({
             model: modelToUse,
@@ -621,7 +621,7 @@ apiRouter.post('/gemini/analyze-script', async (req, res) => {
 
     try {
         const ai = getVertexAIGlobalClient();
-        const modelToUse = resolveModelId(req.body.model, 'gemini-3.5-flash-lite');
+        const modelToUse = resolveModelId(req.body.model, 'gemini-3.6-flash');
         console.log(`[Gemini] Analyzing script with ${modelToUse}`);
         const response = await ai.models.generateContent({
             model: modelToUse,
@@ -968,7 +968,7 @@ CURRENT STREAMER DIALOGUE: "${currentDialogue || ''}"
 DIRECTOR INSTRUCTION: "${instruction}"
 `;
 
-        const modelToUse = resolveModelId(req.body.model, 'gemini-3.5-flash-lite');
+        const modelToUse = resolveModelId(req.body.model, 'gemini-3.6-flash');
         console.log(`[Gemini] Director Co-Pilot running with ${modelToUse}`);
         const response = await ai.models.generateContent({
             model: modelToUse,

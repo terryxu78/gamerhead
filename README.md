@@ -1,12 +1,12 @@
 # GamerHeads - AI Video Generation App
 
-**GamerHeads** is a web application powered by Google's Vertex AI (Gemini Flash-Lite and Gemini Omni models) that automates the creation of AI-generated scripts, avatar images, and video clips with synchronized dialogue and vocal reactions. Designed for one-command deployment to Google Cloud Run.
+**GamerHeads** is a web application powered by Google's Vertex AI (Gemini 3.6 Flash and Gemini Omni models) that automates the creation of AI-generated scripts, avatar images, and video clips with synchronized dialogue and vocal reactions. Designed for one-command deployment to Google Cloud Run.
 
 ---
 
 ## Features
 
-- **AI Script Generation & Video Analysis** — Generate high-energy livestream scripts and shot breakdowns using `gemini-3.5-flash-lite` via Vertex AI.
+- **AI Script Generation & Video Analysis** — Generate high-energy livestream scripts and shot breakdowns using `gemini-3.6-flash` via Vertex AI.
 - **AI Avatar / Image Generation** — Create character images using `gemini-3.1-flash-lite-image` (Vertex AI global endpoint).
 - **AI Video & Vocal FX Generation** — Generate synchronized video clips and vocal reactions using `gemini-omni-flash-preview` (Gemini Omni Flash) with seamless scene continuity or original avatar adherence. Videos are automatically saved to a GCS bucket.
 - **Script-Subtitled Export** — Optional checkbox at export time burns SRT subtitles (built from the script dialogue) into the final video.
@@ -83,7 +83,7 @@ Each click generates a fresh signed URL, so re-clicking a link always works rega
 
 Model names in the dashboard strip only the hyphen separator, preserving the vendor prefix:
 - `gemini-omni-flash-preview` → `gemini omni-flash-preview`
-- `gemini-3.5-flash-lite` → `gemini 3.5-flash-lite`
+- `gemini-3.6-flash` → `gemini 3.6-flash`
 - `gemini-3.1-flash-lite-image` → `gemini 3.1-flash-lite-image`
 
 ---
@@ -114,6 +114,6 @@ To push new code to an existing deployment without changing any environment vari
 
 ## Architecture Notes
 
-- All AI API calls (Gemini 3.5 Flash-Lite, Gemini 3.1 Flash-Lite Image, Gemini Omni Flash) are made **server-side** from the Node.js Cloud Run instance using ADC (or optional `GEMINI_API_KEY`) — user browsers never touch the AI APIs directly.
+- All AI API calls (Gemini 3.6 Flash, Gemini 3.1 Flash-Lite Image, Gemini Omni Flash) are made **server-side** from the Node.js Cloud Run instance using ADC (or optional `GEMINI_API_KEY`) — user browsers never touch the AI APIs directly.
 - Generated videos are proxied through the server or stored to GCS; the GCS bucket is private by default.
 - Firestore (Datastore Mode) is used for logging; no SQL database is required.
