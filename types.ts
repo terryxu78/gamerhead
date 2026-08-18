@@ -85,7 +85,7 @@ export interface StudioState {
 export interface LogEntry {
   userId: string;
   userEmail?: string | null;
-  type: 'image' | 'video' | 'script' | 'export';
+  type: 'image' | 'video' | 'script' | 'script-analysis' | 'export';
   model: string;
   timestamp: number;
   status: 'success' | 'failed';

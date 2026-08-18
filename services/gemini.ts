@@ -163,10 +163,10 @@ export const analyzeScriptForVeo = async (script: string): Promise<VeoSegment[]>
       body: JSON.stringify({ prompt })
     });
 
-    logEvent('script', 'gemini-3.6-flash', 'success', { segments: segments.length });
+    logEvent('script-analysis', 'gemini-3.6-flash', 'success', { segments: segments.length });
     return segments;
   } catch (error: any) {
-    logEvent('script', 'gemini-3.6-flash', 'failed', { error: error.message });
+    logEvent('script-analysis', 'gemini-3.6-flash', 'failed', { error: error.message });
     throw new Error(`Failed to analyze script for video generation: ${error.message}`);
   }
 };
@@ -212,11 +212,15 @@ export const generateOmniClip = async (
         goldenAvatarBase64: rawGoldenAvatar,
         prevPoseBase64: rawPrevPose,
         aspectRatio,
-        durationSeconds
+        durationSeconds,
+        previousInteractionId
       })
     });
 
-    logEvent('video', 'gemini-omni-flash-preview', 'success', { duration: durationSeconds });
+    logEvent('video', 'gemini-omni-flash-preview', 'success', { 
+      duration: durationSeconds,
+      gcsUri: result.videoUri || null
+    });
 
     // Handle base64 video data URL directly
     if (result.videoBase64) {

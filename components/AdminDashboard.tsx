@@ -151,21 +151,20 @@ const AdminDashboard: React.FC = () => {
                     if (log.meta?.aspectRatio === '9:16') verticalExports++;
                 }
                 
-                // Model Usage
-                if (log.model) {
-                    const mName = log.model.replace('gemini-', 'gemini ').replace('veo-', 'veo ');
+                // AI Model Usage (exclude export pipeline operations)
+                if (log.model && log.type !== 'export') {
+                    const mName = log.model.replace('gemini-', 'gemini ');
                     modelMap[mName] = (modelMap[mName] || 0) + 1;
                 }
             }
 
-            // Daily Activity
+            // Daily Activity (AI Models)
             const dateKey = new Date(log.timestamp).toISOString().split('T')[0];
             if (!dailyMap[dateKey]) {
                 dailyMap[dateKey] = { date: dateKey };
             }
-            // Add specific model count to daily entry
-            if (log.model) {
-                 const mName = log.model.replace('gemini-', 'gemini ').replace('veo-', 'veo ');
+            if (log.model && log.type !== 'export' && log.status === 'success') {
+                 const mName = log.model.replace('gemini-', 'gemini ');
                  dailyMap[dateKey][mName] = (dailyMap[dateKey][mName] || 0) + 1;
             }
         });
@@ -292,7 +291,7 @@ const AdminDashboard: React.FC = () => {
                             onClick={() => fetchData()}
                             className="bg-google-blue hover:bg-google-blueHover text-gray-900 px-6 py-2 rounded-lg font-bold text-sm shadow-md transition-colors flex items-center justify-center gap-2"
                         >
-                            {loading ? <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"></div> : 'Refesh Data'}
+                            {loading ? <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"></div> : 'Refresh Data'}
                         </button>
                     </div>
                 </div>
@@ -422,20 +421,31 @@ const AdminDashboard: React.FC = () => {
                                             log.type === 'video' ? 'bg-purple-900/30 text-purple-300' :
                                             log.type === 'image' ? 'bg-blue-900/30 text-blue-300' :
                                             log.type === 'export' ? 'bg-green-900/30 text-green-300' :
+                                            log.type === 'script-analysis' ? 'bg-cyan-900/30 text-cyan-300' :
                                             'bg-gray-700 text-gray-300'
                                         }`}>
-                                            {log.type}
+                                            {log.type === 'script-analysis' ? 'analysis' : log.type}
                                         </span>
                                     </td>
                                     <td className="px-6 py-4 text-xs font-medium text-gray-300">
-                                        {log.model.replace('gemini-','gemini ').replace('veo-','veo ')}
+                                        {log.model.replace('gemini-', 'gemini ')}
                                     </td>
                                     <td className="px-6 py-4">
-                                        <div className="flex items-center gap-2">
-                                            <div className={`w-2 h-2 rounded-full ${log.status === 'success' ? 'bg-green-500' : 'bg-red-500'}`}></div>
-                                            <span className={`text-xs font-bold ${log.status === 'success' ? 'text-green-400' : 'text-red-400'}`}>
-                                                {log.status.toUpperCase()}
-                                            </span>
+                                        <div className="flex flex-col gap-0.5">
+                                            <div className="flex items-center gap-2">
+                                                <div className={`w-2 h-2 rounded-full ${log.status === 'success' ? 'bg-green-500' : 'bg-red-500'}`}></div>
+                                                <span className={`text-xs font-bold ${log.status === 'success' ? 'text-green-400' : 'text-red-400'}`}>
+                                                    {log.status.toUpperCase()}
+                                                </span>
+                                            </div>
+                                            {log.status === 'failed' && log.meta?.error && (
+                                                <span 
+                                                    className="text-[10px] text-red-400/80 truncate max-w-[200px]" 
+                                                    title={typeof log.meta.error === 'string' ? log.meta.error : JSON.stringify(log.meta.error)}
+                                                >
+                                                    {typeof log.meta.error === 'string' ? log.meta.error : 'Error'}
+                                                </span>
+                                            )}
                                         </div>
                                     </td>
                                     <td className="px-6 py-4 text-xs">
